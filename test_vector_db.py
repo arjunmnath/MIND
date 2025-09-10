@@ -10,7 +10,7 @@ headers = [
     "abstract", "url", "title_entities", "abstract_entities"
 ]
 
-news_path = input("news.tsv path: ") 
+news_path = 'dataset/large_dev/news.tsv' 
 df = pd.read_csv(news_path.strip(), sep="\t", names=headers, quoting=3)
 print(f"Loaded {len(df)} news articles")
 
@@ -26,51 +26,28 @@ qdrant = QdrantClient(
 
 collection_name = "news_embeddings"
 
-qdrant.recreate_collection(
-    collection_name=collection_name,
-    vectors_config=models.VectorParams(
-        size=768,  
-        distance=models.Distance.COSINE
-    )
-)
-
-df["combined_text"] = (
-    df["category"].fillna("") + " " +
-    df["subcategory"].fillna("") + " " +
-    df["title"].fillna("") + " " +
-    df["abstract"].fillna("")
-)
-
-texts = df["combined_text"].tolist()
-batch_size = 128
-
-for i in tqdm(range(0, len(texts), batch_size), desc="Encoding & Upserting Embeddings"):
-    batch = texts[i:i+batch_size]
-    embeddings = model.encode(batch, show_progress_bar=False, device=device)
-
-    points = [
-        models.PointStruct(
-            id=i + idx,
-            vector=embeddings[idx],
-            payload={"news_id": df.iloc[i + idx]["news_id"]}
-        )
-        for idx in range(len(batch))
-    ]
-
-    qdrant.upsert(collection_name=collection_name, points=points)
-
-print(f"✅ Stored all embeddings in Qdrant Cloud.")
- 
-query = "Latest updates on space exploration and Mars missions"
+query = input("search query: ") 
 query_emb = model.encode(query, device=device)
+query_bias_emb = model.encode("liked by teenagers", device=device)
 
-results = qdrant.search(
+query_vec = query_emb + query_bias_emb
+conditioned = qdrant.search(
     collection_name=collection_name,
     query_vector=query_emb,
     limit=5
 )
+non_conditioned = qdrant.search(
+    collection_name=collection_name,
+    query_vector=query_vec,
+    limit=5
+)
 
-print("\n🔍 Top 5 Relevant News Articles:")
-for r in results:
+print("\n🔍 Top 5 Relevant News Articles(conditioned):")
+for r in conditioned:
+    news_idx = df.index[df["news_id"] == r.payload["news_id"]][0]
+    print(f"Score: {r.score:.4f} | Title: {df.iloc[news_idx]['title']}")
+
+print("\n🔍 Top 5 Relevant News Articles(unconditioned):")
+for r in non_conditioned:
     news_idx = df.index[df["news_id"] == r.payload["news_id"]][0]
     print(f"Score: {r.score:.4f} | Title: {df.iloc[news_idx]['title']}")
