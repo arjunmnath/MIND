@@ -82,49 +82,4 @@ def reset_schema():
         print("❌ Error:", e)
 
 
-def insert_article(article_json):
-    sql = """
-        INSERT INTO articles (title, content, url, published_date, source, region, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
-        RETURNING id;
-    """
 
-    try:
-        conn = psycopg2.connect(
-            user=USER, password=PASSWORD, host=HOST, port=PORT, dbname=DBNAME
-        )
-        cur = conn.cursor()
-
-        cur.execute(
-            sql,
-            (
-                article_json.get("title"),
-                article_json.get("content"),
-                article_json.get("url"),
-                article_json.get(
-                    "published_date"
-                ),  # should be a valid timestamp string (e.g. "2025-09-15T10:00:00Z")
-                article_json.get("source"),
-                article_json.get("region"),
-            ),
-        )
-
-        new_id = cur.fetchone()[0]
-        conn.commit()
-
-        print(f"✅ Article inserted with id {new_id}")
-
-        cur.close()
-        conn.close()
-
-        return new_id
-    except Exception as e:
-        print("❌ Error inserting article:", e)
-        return None
-
-
-if __name__ == "__main__":
-    with open("scraper/articles.json") as f:
-        articles = json.load(f)
-        for article in articles:
-            insert_article(article)

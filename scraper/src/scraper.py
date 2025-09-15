@@ -37,12 +37,10 @@ def scrape_all_regions():
             config = yaml.safe_load(f)
         region_feeds = config.get('region_feeds', {})
         all_articles = []
-
         for region, urls in region_feeds.items():
             for url in urls:
                 articles = scrape_feed(url, region)
                 all_articles.extend(articles)
-
         logger.info(f"Total articles scraped: {len(all_articles)}")
         # Return or save all_articles
     except Exception as e:
