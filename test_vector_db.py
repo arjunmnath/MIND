@@ -26,9 +26,10 @@ qdrant = QdrantClient(
 
 collection_name = "news_embeddings"
 
+"""
 query = input("search query: ") 
 query_emb = model.encode(query, device=device)
-query_bias_emb = model.encode("liked by teenagers", device=device)
+query_bias_emb = model.encode("query: related to india", device=device)
 
 query_vec = query_emb + query_bias_emb
 conditioned = qdrant.search(
@@ -51,3 +52,4 @@ print("\n🔍 Top 5 Relevant News Articles(unconditioned):")
 for r in non_conditioned:
     news_idx = df.index[df["news_id"] == r.payload["news_id"]][0]
     print(f"Score: {r.score:.4f} | Title: {df.iloc[news_idx]['title']}")
+"""
