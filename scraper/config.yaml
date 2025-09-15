@@ -1,0 +1,15 @@
+region_feeds:
+  GLOBAL: # Global
+    - https://feeds.bbci.co.uk/news/world/rss.xml
+  EU: # European Union
+    - https://feeds.bbci.co.uk/news/world/europe/rss.xml
+  IN: # Indian Subcontinent
+    - https://feeds.bbci.co.uk/news/world/asia/india/rss.xml
+  US: # United States, required as a separate category for tech and geopolitical news
+    - https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml
+  AS: # Asia
+    - https://feeds.bbci.co.uk/news/world/asia/rss.xml
+  AF: # Africa
+    - https://feeds.bbci.co.uk/news/world/africa/rss.xml
+  LATAM: # Latin America
+    - https://feeds.bbci.co.uk/news/world/latin_america/rss.xml    
