@@ -1,10 +1,8 @@
-from functools import partial
 from typing import List, Union
 
-import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from tqdm import tqdm
 
 tqdm.pandas()
@@ -16,10 +14,9 @@ class Mind(Dataset):
     embeddings or news content, with options for precomputing or using raw news data.
 
     Args:
-        behaviour_path (str): Path to the CSV file containing user behavior data.
-        precompute (bool): Whether to use precomputed embeddings (default is False).
-        embedding_path (Union[str, None]): Path to the precomputed embeddings (if precompute is True).
-        news_path (Union[str, None]): Path to the CSV file containing news articles (if precompute is False).
+        dataset_dir (str): Directory path containing the dataset files.
+        precompute (bool): Flag to indicate if precomputed embeddings should be used.
+        embedding_path (Union[str, None]): Path to precomputed embeddings file (required if precompute is True).
 
     Attributes:
         df (pd.DataFrame): DataFrame holding user behavior data.
@@ -30,20 +27,20 @@ class Mind(Dataset):
 
     def __init__(
         self,
-        behaviour_path: str,
+        dataset_dir: str,
         precompute: bool = False,
         embedding_path: Union[str, None] = None,
-        news_path: Union[str, None] = None,
     ) -> None:
         """
         Initializes the Mind dataset by loading behavior data and either embedding data or news data.
 
         Args:
-            behaviour_path (str): Path to the user behavior CSV.
+            dataset_dir (str): Directory path containing the dataset files.
             precompute (bool): Flag to indicate if precomputed embeddings should be used.
             embedding_path (Union[str, None]): Path to precomputed embeddings file (required if precompute is True).
-            news_path (Union[str, None]): Path to news CSV (required if precompute is False).
         """
+        behaviour_path = dataset_dir + "/normalized_behaviours.csv"
+        news_path = dataset_dir + "/processed_news.csv"
         self.df = pd.read_csv(behaviour_path)
         self.precompute = precompute
         if precompute:
@@ -176,4 +173,3 @@ class Mind(Dataset):
         except KeyError:
             return torch.tensor([])
         return torch.tensor([])
-

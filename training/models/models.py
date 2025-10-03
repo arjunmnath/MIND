@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 
 
-class NewsTower(nn.Module):
+class NewsEncoder(nn.Module):
     """
     A model that encodes and projects text into a normalized vector space.
 
@@ -25,13 +25,13 @@ class NewsTower(nn.Module):
     def __init__(
         self, embed_dim=768, hidden_dim=128, dropout=0.1, is_vector_input=True
     ):
-        super(NewsTower, self).__init__()
+        super(NewsEncoder, self).__init__()
         self.model = SentenceTransformer("google/embeddinggemma-300m")
         self.project = nn.Sequential(
-            nn.Linear(embed_dim, hidden_dim),
-            nn.ReLU(),
+            nn.Linear(embed_dim, embed_dim),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+            nn.SiLU(),
         )
         self.is_vector_input = is_vector_input
 
@@ -56,9 +56,9 @@ class NewsTower(nn.Module):
         return F.normalize(projections, p=2, dim=-1)
 
 
-class UserTower(nn.Module):
+class UserEncoder(nn.Module):
     def __init__(self, embed_dim=768, hidden_dim=128, dropout=0.1, agg="attention"):
-        super(UserTower, self).__init__()
+        super(UserEncoder, self).__init__()
         self.agg_type = agg
         self.project = nn.Sequential(
             nn.Linear(embed_dim, hidden_dim),
@@ -72,16 +72,16 @@ class UserTower(nn.Module):
             self.gru = nn.GRU(embed_dim, embed_dim, batch_first=True)
 
     def forward(self, history_embs):
-        # if self.agg_type == "mean":
-        #     out = history_embs.mean(dim=1)
-        # elif self.agg_type == "gru":
-        #     _, h = self.gru(history_embs)
-        #     out = h.squeeze(0)
-        # elif self.agg_type == "attention":
-        #     attn_out, _ = self.attn(history_embs, history_embs, history_embs)
-        #     out = attn_out
-        # else:
-        #     raise ValueError("Unknown aggregator")
+        if self.agg_type == "mean":
+            out = history_embs.mean(dim=1)
+        elif self.agg_type == "gru":
+            _, h = self.gru(history_embs)
+            out = h.squeeze(0)
+        elif self.agg_type == "attention":
+            attn_out, _ = self.attn(history_embs, history_embs, history_embs)
+            out = attn_out
+        else:
+            raise ValueError("Unknown aggregator")
         attn_out, _ = self.attn(history_embs, history_embs, history_embs)
         out = attn_out
         return F.normalize(self.project(out), p=2, dim=-1)
@@ -100,7 +100,7 @@ def infonce_loss(anchor, positive, negative, temperature=0.07):
 
     anchor = F.normalize(anchor, p=2, dim=1)
     positive = F.normalize(positive, p=2, dim=1)
-    negative = F.normalize(negative, p=2, dim=2)  
+    negative = F.normalize(negative, p=2, dim=2)
 
     # Calculate similarity scores (dot products)
     pos_sim = torch.bmm(
@@ -140,24 +140,19 @@ def infonce_loss(anchor, positive, negative, temperature=0.07):
 #         return similarity
 #
 
-contents = [
-    "Breaking News: Economy Soars"
-    + "The economy experienced a major surge today due to..."
-]
-
-device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps" if torch.mps.is_available() else "cpu"
-)
+# contents = [
+#     "Breaking News: Economy Soars"
+#     + "The economy experienced a major surge today due to..."
+# ]
+#
 
 # news_tower = NewsTower(is_vector_input=False).to(device)
 # print(torch.var(news_tower(contents)))
 #
-user_history_embeddings = torch.randn(1, 5, 768).to(device)
-user_tower = UserTower(embed_dim=768, hidden_dim=128).to(device)
-print(user_tower(user_history_embeddings).shape)
-
+# user_history_embeddings = torch.randn(1, 5, 768).to(device)
+# user_tower = UserTower(embed_dim=768, hidden_dim=128).to(device)
+# print(user_tower(user_history_embeddings).shape)
+#
 # user_embed = user_tower(user_history_embeddings).detach()
 # news_embed = news_tower(contents).detach()
 # labels = torch.ones(1).to(device)
