@@ -90,7 +90,6 @@ def main(args):
                 epoch=t,
                 device=device,
             )
-
         model_info = mlflow.pytorch.log_model(model, name="model")
 
 
