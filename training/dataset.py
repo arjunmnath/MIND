@@ -48,30 +48,10 @@ class Mind(Dataset):
                 ".pth"
             ), "Expected path to precompute news embeddings"
             self.embed = torch.load(embedding_path)
-            print("Merging with precomputed embeddings: ")
-            (
-                self.df["clicks_ready"],
-                self.df["non_clicks_ready"],
-                self.df["history_ready"],
-            ) = zip(
-                *self.df[["clicks", "non_clicks", "history"]].progress_apply(
-                    self._get_batch_embeddings, axis=1
-                )
-            )
         else:
             assert news_path is not None, "Expected path to news csv..."
             self.news = pd.read_csv(news_path)
             self.news.set_index("news_id", inplace=True)
-            print("Merging with news.csv: ")
-            (
-                self.df["clicks_ready"],
-                self.df["non_clicks_ready"],
-                self.df["history_ready"],
-            ) = zip(
-                *self.df[["clicks", "non_clicks", "history"]].progress_apply(
-                    self._get_batch_news, axis=1
-                )
-            )
 
     def __len__(self) -> int:
         """
@@ -95,9 +75,17 @@ class Mind(Dataset):
         """
         items = self.df.iloc[idx]
         return (
-            items["history_ready"],
-            items["clicks_ready"],
-            items["non_clicks_ready"],
+            zip(
+                *items[["clicks", "non_clicks", "history"]].apply(
+                    self._get_batch_embeddings, axis=1
+                )
+            )
+            if self.precompute
+            else zip(
+                *self.df[["clicks", "non_clicks", "history"]].apply(
+                    self._get_batch_news, axis=1
+                )
+            )
         )
 
     def _get_batch_embeddings(self, row) -> tuple:

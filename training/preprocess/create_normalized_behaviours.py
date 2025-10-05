@@ -5,7 +5,6 @@ from tqdm import tqdm
 
 assert len(sys.argv) == 2
 behaviour_csv = sys.argv[1]
-batch_size = 512
 
 headers = ["id", "user_id", "timestamp", "history", "impressions"]
 df = pd.read_csv(behaviour_csv, sep="\t", names=headers, quoting=3)
@@ -30,4 +29,4 @@ def get_non_clicks(impressions):
 df["clicks"] = df["impressions"].apply(get_clicks)
 df["non_clicks"] = df["impressions"].apply(get_non_clicks)
 df = df.drop(columns=["id", "timestamp", "impressions"])
-df.to_csv('../dataset/normalized_behaviours.csv', index=False)
+df.to_csv("../dataset/normalized_behaviours.csv", index=False)
