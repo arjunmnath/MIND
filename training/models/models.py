@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -57,6 +59,10 @@ class NewsEncoder(nn.Module):
 
 
 class UserEncoder(nn.Module):
+    """
+    paper: Neural News Recommendation with Multi-Head Self-Attention (https://wuch15.github.io/paper/EMNLP2019-NRMS.pdf)
+    """
+
     def __init__(self, embed_dim=768, hidden_dim=128, dropout=0.1, agg="attention"):
         super(UserEncoder, self).__init__()
         self.agg_type = agg
@@ -85,6 +91,19 @@ class UserEncoder(nn.Module):
         attn_out, _ = self.attn(history_embs, history_embs, history_embs)
         out = attn_out
         return F.normalize(self.project(out), p=2, dim=-1)
+
+
+class TwoTowerRecommendation(nn.Module):
+    def __init__(self):
+        super(TwoTowerRecommendation, self).__init__()
+        self.user_tower = UserEncoder()
+        self.news_tower = NewsEncoder()
+
+    def forward(self, history, clicks, non_clicks):
+        indexes = []
+        relevance = []
+        target = []
+        return indexes, relevance, target
 
 
 def infonce_loss(anchor, positive, negative, temperature=0.07):
@@ -125,37 +144,3 @@ def infonce_loss(anchor, positive, negative, temperature=0.07):
     loss = F.cross_entropy(logits, labels)
 
     return loss
-
-
-# class TwoTowerRecommendation(nn.Module):
-#     def __init__(self, user_tower, news_tower):
-#         super(TwoTowerRecommendation, self).__init__()
-#         self.user_tower = user_tower
-#         self.news_tower = news_tower
-#
-#     def forward(self, user_history_embeddings, contents, labels):
-#         news_embedding = self.news_tower(contents)
-#         user_embedding = self.user_tower(user_history_embeddings)
-#         similarity = F.cosine_similarity(user_embedding, news_embedding, dim=-1)
-#         return similarity
-#
-
-# contents = [
-#     "Breaking News: Economy Soars"
-#     + "The economy experienced a major surge today due to..."
-# ]
-#
-
-# news_tower = NewsTower(is_vector_input=False).to(device)
-# print(torch.var(news_tower(contents)))
-#
-# user_history_embeddings = torch.randn(1, 5, 768).to(device)
-# user_tower = UserTower(embed_dim=768, hidden_dim=128).to(device)
-# print(user_tower(user_history_embeddings).shape)
-#
-# user_embed = user_tower(user_history_embeddings).detach()
-# news_embed = news_tower(contents).detach()
-# labels = torch.ones(1).to(device)
-# loss = nn.CosineEmbeddingLoss(margin=0.0)
-# similarity_score = F.cosine_similarity(user_embed, news_embed, dim=-1)
-# print(similarity_score, loss(user_embed, news_embed, labels))

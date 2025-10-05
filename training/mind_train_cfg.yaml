@@ -1,0 +1,23 @@
+data_config:
+  embed_path: ./model_binaries
+  data_dir: ./dataset
+  precompute: false
+
+trainer_config:
+  max_epochs: 10
+  batch_size: 64
+  data_loader_workers: 4
+  grad_norm_clip: 1.0
+  snapshot_path: snapshot.pt
+  save_every: 3
+  log_every: 100
+  use_amp: True
+  bucket_name: dl-training-snapshots
+
+optimizer_config:
+  weight_decay: 0.1
+  learning_rate: 0.0003
+
+hydra:
+  run:
+    dir: ./

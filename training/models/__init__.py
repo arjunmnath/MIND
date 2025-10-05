@@ -1,1 +1,1 @@
-from .models import NewsTower, UserTower
+from .models import NewsEncoder, TwoTowerRecommendation, UserEncoder
