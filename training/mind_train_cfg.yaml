@@ -18,6 +18,9 @@ optimizer_config:
   weight_decay: 0.1
   learning_rate: 0.0003
 
+mlflow:
+  tracking_uri: https://dbc-185e84ca-4daa.cloud.databricks.com/
+
 hydra:
   run:
     dir: ./

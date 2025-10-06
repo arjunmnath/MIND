@@ -5,7 +5,7 @@ from pathlib import Path
 import hydra
 import mlflow
 import torch
-from config_classes import DataConfig, OptimizerConfig, TrainingConfig
+from config_classes import DataConfig, MLFlowConfig, OptimizerConfig, TrainingConfig
 from dataset import Mind
 from models import *
 from models.models import InfoNCE, TwoTowerRecommendation
@@ -96,6 +96,10 @@ def main(cfg: DictConfig):
     opt_cfg = OptimizerConfig(**cfg["optimizer_config"])
     data_cfg = DataConfig(**cfg["data_config"])
     trainer_cfg = TrainingConfig(**cfg["trainer_config"])
+    mlflow_cfg = MLFlowConfig(**cfg["mlflow"])
+
+    mlflow.set_tracking_uri(mlflow_cfg.tracking_uri)
+    mlflow.set_experiment("/Users/dev.arjunmnath@gmail.com/mind-recommendation-system")
 
     model, optimizer, loss_fn, metrices, train_data, test_data = get_train_objs(
         data_cfg, opt_cfg
@@ -129,8 +133,6 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    mlflow.login()
-    mlflow.set_experiment("/Users/dev.arjunmnath@gmail.com/mind-recommendation-system")
     _min_gpu_count = 1
     if not verify_min_gpu_count(min_gpus=_min_gpu_count):
         print(

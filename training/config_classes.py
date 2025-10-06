@@ -38,6 +38,11 @@ class DataConfig:
 
 
 @dataclass
+class MLFlowConfig:
+    tracking_uri: str
+
+
+@dataclass
 class Snapshot:
     model_state: "OrderedDict[str, torch.Tensor]"
     optimizer_state: Dict[str, Any]
