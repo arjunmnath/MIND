@@ -6,7 +6,7 @@ import fsspec
 import mlflow
 import torch
 from config_classes import Snapshot, TrainingConfig
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
@@ -45,7 +45,7 @@ class Trainer:
         self.model = model.to(self.local_rank)
         self.optimizer = optimizer
         self.save_every = self.config.save_every
-        
+
         if self.config.use_amp:
             self.scaler = GradScaler(self.device_type)
         if self.config.snapshot_path is None:
