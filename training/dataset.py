@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import List, Union
 
 import pandas as pd
@@ -14,9 +15,9 @@ class Mind(Dataset):
     embeddings or news content, with options for precomputing or using raw news data.
 
     Args:
-        dataset_dir (str): Directory path containing the dataset files.
+        dataset_dir (Path): Directory path containing the dataset files.
         precompute (bool): Flag to indicate if precomputed embeddings should be used.
-        embedding_path (Union[str, None]): Path to precomputed embeddings file (required if precompute is True).
+        embed_dir(Union[Path, None]): Path to precomputed embeddings file (required if precompute is True).
 
     Attributes:
         df (pd.DataFrame): DataFrame holding user behavior data.
@@ -27,30 +28,32 @@ class Mind(Dataset):
 
     def __init__(
         self,
-        dataset_dir: str,
+        dataset_dir: Path,
         precompute: bool = False,
-        embedding_path: Union[str, None] = None,
+        embed_dir: Union[Path, None] = None,
     ) -> None:
         """
         Initializes the Mind dataset by loading behavior data and either embedding data or news data.
 
         Args:
-            dataset_dir (str): Directory path containing the dataset files.
+            dataset_dir (Path): Directory path containing the dataset files.
             precompute (bool): Flag to indicate if precomputed embeddings should be used.
-            embedding_path (Union[str, None]): Path to precomputed embeddings file (required if precompute is True).
+            embedding_path (Union[Path, None]): Path to precomputed embeddings file (required if precompute is True).
         """
-        behaviour_path = dataset_dir + "/normalized_behaviours.csv"
-        news_path = dataset_dir + "/processed_news.csv"
-        self.df = pd.read_csv(behaviour_path)
+        behaviour_path = dataset_dir / "normalized_behaviours.csv"
+        news_path = dataset_dir / "processed_news.csv"
+        assert (
+            behaviour_path.exists() and news_path.exists()
+        ), "behaviour_path or news_path does not exist"
+        self.df = pd.read_csv(behaviour_path.absolute().as_posix())
         self.precompute = precompute
         if precompute:
-            assert embedding_path is not None and embedding_path.endswith(
-                ".pth"
-            ), "Expected path to precompute news embeddings"
-            self.embed = torch.load(embedding_path)
+            assert embed_dir is not None, "embedding directory is required"
+            embed_path = embed_dir / "embedding.pth"
+            assert embed_path.exists(), "embeeding file does not exist"
+            self.embed = torch.load(embed_path.absolute().as_posix())
         else:
-            assert news_path is not None, "Expected path to news csv..."
-            self.news = pd.read_csv(news_path)
+            self.news = pd.read_csv(news_path.absolute().as_posix())
             self.news.set_index("news_id", inplace=True)
 
     def __len__(self) -> int:

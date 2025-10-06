@@ -8,7 +8,7 @@ import torch
 from config_classes import DataConfig, OptimizerConfig, TrainingConfig
 from dataset import Mind
 from models import *
-from models.models import TwoTowerRecommendation
+from models.models import InfoNCE, TwoTowerRecommendation
 from omegaconf import DictConfig
 from torch.distributed import destroy_process_group, init_process_group
 from torch.utils.data import DataLoader
@@ -60,18 +60,18 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
     """
     train_dir = Path(data_cfg.data_dir) / "train"
     test_dir = Path(data_cfg.data_dir) / "test"
-
+    embed_dir = Path(data_cfg.embed_dir)
     train_dataset = Mind(
-        train_dir.absolute().as_posix(),
+        dataset_dir=train_dir,
         precompute=data_cfg.precompute,
-        embedding_path=data_cfg.embed_path,
+        embed_dir=embed_dir,
     )
     test_dataset = Mind(
-        test_dir.absolute().as_posix(),
+        dataset_dir=test_dir,
         precompute=data_cfg.precompute,
-        embedding_path=data_cfg.embed_path,
+        embed_dir=embed_dir,
     )
-    loss_fn = torch.nn.CrossEntropyLoss()
+    loss_fn = InfoNCE()
     auc_roc = RetrievalAUROC()
     ndcg_5 = RetrievalNormalizedDCG(top_k=5)
     ndcg_10 = RetrievalNormalizedDCG(top_k=10)

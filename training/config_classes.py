@@ -32,7 +32,7 @@ class OptimizerConfig:
 
 @dataclass
 class DataConfig:
-    embed_path: str
+    embed_dir: str
     data_dir: str
     precompute: bool
 

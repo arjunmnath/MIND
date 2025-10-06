@@ -1,5 +1,5 @@
 data_config:
-  embed_path: ./model_binaries
+  embed_dir: ./model_binaries
   data_dir: ./dataset
   precompute: false
 
