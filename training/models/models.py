@@ -107,7 +107,7 @@ class TwoTowerRecommendation(nn.Module):
 
 
 class InfoNCE(nn.Module):
-    """Implementation of the InfoNCE (Information Noise Contrastive Estimation) loss function.
+    """Partial Implementation of the InfoNCE (Information Noise Contrastive Estimation) loss function.
 
     Paper: https://arxiv.org/pdf/1807.03748#page=3
 

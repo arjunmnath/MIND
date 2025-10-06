@@ -45,7 +45,7 @@ class Trainer:
         self.model = model.to(self.local_rank)
         self.optimizer = optimizer
         self.save_every = self.config.save_every
-
+        
         if self.config.use_amp:
             self.scaler = GradScaler(self.device_type)
         if self.config.snapshot_path is None:
@@ -107,7 +107,7 @@ class Trainer:
             enabled=(self.config.use_amp),
         ):
             indexes, relevance, target = self.model(history, clicks, non_clicks)
-            loss = self.loss_fn(indexes, relevance, target)
+            loss = self.loss_fn(relevance, target)
             metrices = [
                 metric(relevance, target, indexes=indexes) for metric in self.metrices
             ]
@@ -138,11 +138,11 @@ class Trainer:
             history = history.to(self.local_rank)
             clicks = clicks.to(self.local_rank)
             non_clicks = non_clicks.to(self.local_rank)
+            torch.cuda.empty_cache()
             if train:
                 self.model.train()
             else:
                 self.model.eval()
-            return
             metrices, batch_loss = self._run_batch(history, clicks, non_clicks, train)
             if iter % 100 == 0:
                 print(

@@ -10,7 +10,7 @@ trainer_config:
   snapshot_path: snapshot.pt
   save_every: 3
   log_every: 100
-  use_amp: True
+  use_amp: true
   bucket_name: dl-training-snapshots
 
 optimizer_config:
@@ -18,7 +18,7 @@ optimizer_config:
   learning_rate: 0.0003
 
 mlflow:
-  tracking_uri: databricks 
+  tracking_uri: databricks
 
 hydra:
   run:

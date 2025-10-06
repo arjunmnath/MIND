@@ -174,7 +174,7 @@ if __name__ == "__main__":
     loader = DataLoader(dataset, batch_size=64)
     model = TwoTowerRecommendation()
     ndcg = RetrievalNormalizedDCG()
-    loss = InfoNCE()
+    loss = torch.nn.CosineEmbeddingLoss()
     for iter, (history, clicks, non_clicks) in enumerate(loader):
         indexes, relevance, target = model(history, clicks, non_clicks)
         print(ndcg(relevance, target, indexes=indexes))
