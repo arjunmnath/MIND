@@ -32,7 +32,7 @@ class NewsEncoder(nn.Module):
         if not is_vector_input:
             self.model = SentenceTransformer("google/embeddinggemma-300m")
         self.project = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
+            nn.Linear(embed_dim, embed_dim, bias=False),
             nn.Dropout(dropout),
             nn.LayerNorm(embed_dim),
             nn.SiLU(),
@@ -68,42 +68,58 @@ class TwoTowerRecommendation(nn.Module):
 
     def forward(self, history, clicks, non_clicks):
         """
-        history: [batch_size, num_history, 768]
-        clicks: [batch_size, num_clicks, 768]
-        non_clicks: [batch_size, num_non_clicks, 768]
+        history: [batch_size, history_pad_size, 768]
+        clicks: [batch_size, clicks_pad_size, 768]
+        non_clicks: [batch_size, non_clicks_pad_size, 768]
         """
         history = self.news_tower(history)
         clicks = self.news_tower(clicks)
         non_clicks = self.news_tower(non_clicks)
-
         user_repr, _ = self.user_tower(history)  # dim: [batch_size, 768]
         user_repr = F.normalize(
             user_repr.unsqueeze(1), p=2, dim=-1
         )  # dim: [batch_size, 1, 768]
-        relevance_clicks = torch.bmm(user_repr, clicks.transpose(1, 2)).squeeze(
+        relevance_clicks_padded = torch.bmm(user_repr, clicks.transpose(1, 2)).squeeze(
             1
-        )  # dims: [batch_size, num_clicks]
-        relevance_non_clicks = torch.bmm(user_repr, non_clicks.transpose(1, 2)).squeeze(
+        )  # dims: [batch_size, click_pad_size]
+        relevance_non_clicks_padded = torch.bmm(
+            user_repr, non_clicks.transpose(1, 2)
+        ).squeeze(
             1
-        )  # dims: [batch_size, num_non_clicks]
+        )  # dims: [batch_size, non_click_pad_size]
+        batch_size, clicks_pad_size = relevance_clicks_padded.shape
+        non_click_pad_size = relevance_non_clicks_padded.shape[1]
+        relevance_mask = torch.cat(
+            [relevance_non_clicks_padded, relevance_clicks_padded], dim=1
+        )
+        # Removing the paddings so that it doesn't hinder with bceloss
+        non_zero_clicks_mask = relevance_clicks_padded != 0
+        non_zero_non_clicks_mask = relevance_non_clicks_padded != 0
+        relevance_mask = relevance_mask != 0
 
-        target_clicks = torch.ones_like(relevance_clicks)  # [batch_size, num_clicks]
-        target_non_clicks = torch.zeros_like(
-            relevance_non_clicks
-        )  # [batch_size, num_non_clicks]
+        relevance_clicks = relevance_clicks_padded[
+            non_zero_clicks_mask
+        ]  # dim: [click_count]
+        relevance_non_clicks = relevance_non_clicks_padded[
+            non_zero_non_clicks_mask
+        ]  # dim: [non_click_count]
 
+        target_clicks = torch.ones_like(relevance_clicks)  # [click_count]
+        target_non_clicks = torch.zeros_like(relevance_non_clicks)  # [num_non_clicks]
         relevance = torch.cat(
-            [relevance_clicks, relevance_non_clicks], dim=1
+            [relevance_clicks, relevance_non_clicks], dim=0
         )  # dims: [batch_size, num_clicks + num_non_clicks]
         target = torch.cat(
-            [target_clicks, target_non_clicks], dim=1
+            [target_clicks, target_non_clicks]
         )  # dims: [batch_size, num_clicks + num_non_clicks]
 
         indexes = torch.cat(
-            [torch.arange(relevance.size(0)).unsqueeze(1)] * relevance.size(1), dim=1
+            [torch.arange(batch_size).unsqueeze(1)]
+            * (clicks_pad_size + non_click_pad_size),
+            dim=1,
         )  # dims: [batch_size, num_clicks + num_non_clicks]
-
-        return indexes.flatten(), relevance.flatten(), target.flatten()
+        indexes = indexes[relevance_mask]
+        return indexes, relevance, target
 
 
 class InfoNCE(nn.Module):
@@ -123,7 +139,7 @@ class InfoNCE(nn.Module):
             lenient.
     """
 
-    def __init__(self, temperature=0.03):
+    def __init__(self, temperature=0.07):
         """
         Initializes the InfoNCE loss module with the given temperature.
 
@@ -148,7 +164,7 @@ class InfoNCE(nn.Module):
             torch.Tensor: The computed InfoNCE loss.
         """
         logits = similarities / self.temperature
-        loss = F.binary_cross_entropy_with_logits(logits, target)
+        loss = F.cross_entropy(logits, target)
         return loss
 
 

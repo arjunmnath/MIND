@@ -58,10 +58,10 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
     Returns:
         tuple: Contains the model, optimizer, loss function, metrics, training dataset, and testing dataset.
     """
-    data_dir = Path(data_cfg.data_dir) 
+    data_dir = Path(data_cfg.data_dir)
     embed_dir = Path(data_cfg.embed_dir)
     train_dataset = Mind(
-        dataset_dir= data_dir / "train",
+        dataset_dir=data_dir / "train",
         precompute=data_cfg.precompute,
         embed_dir=embed_dir / "train",
     )
@@ -103,7 +103,6 @@ def main(cfg: DictConfig):
     model, optimizer, loss_fn, metrices, train_data, test_data = get_train_objs(
         data_cfg, opt_cfg
     )
-
     trainer = Trainer(
         config=trainer_cfg,
         model=model,
