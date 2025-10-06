@@ -129,8 +129,8 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    # mlflow.login()
-    # mlflow.set_experiment("/Users/dev.arjunmnath@gmail.com/mind-recommendation-system")
+    mlflow.login()
+    mlflow.set_experiment("/Users/dev.arjunmnath@gmail.com/mind-recommendation-system")
     _min_gpu_count = 1
     if not verify_min_gpu_count(min_gpus=_min_gpu_count):
         print(
