@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 from torchinfo import summary
-from user_encoder import UserEncoder
+
+from .user_encoder import UserEncoder
 
 
 class NewsEncoder(nn.Module):
@@ -57,6 +58,7 @@ class NewsEncoder(nn.Module):
         batch_embeddings = batch_embeddings.clone().detach()
         projections = self.project(batch_embeddings)  # shape: [batch_size, 768]
         return F.normalize(projections, p=2, dim=-1)
+
 
 class TwoTowerRecommendation(nn.Module):
     def __init__(self):
