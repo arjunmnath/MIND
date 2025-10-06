@@ -149,10 +149,11 @@ class Trainer:
                     f"[RANK{self.global_rank}] Epoch {epoch} | Iter {iter} | {step_type} Loss {batch_loss:.5f} |"
                     f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f}"
                 )
-                mlflow.log_metric("loss", batch_loss, step=iter)
-                mlflow.log_metric("auc", metrices[0], step=iter)
-                mlflow.log_metric("ndcg_5", metrices[1], step=iter)
-                mlflow.log_metric("ndcg_10", metrices[2], step=iter)
+                if self.local_rank == 0:
+                    mlflow.log_metric("loss", batch_loss, step=iter)
+                    mlflow.log_metric("auc", metrices[0], step=iter)
+                    mlflow.log_metric("ndcg_5", metrices[1], step=iter)
+                    mlflow.log_metric("ndcg_10", metrices[2], step=iter)
 
     def train(self):
         for epoch in range(self.epochs_run, self.config.max_epochs):

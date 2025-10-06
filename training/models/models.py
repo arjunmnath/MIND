@@ -117,7 +117,10 @@ class TwoTowerRecommendation(nn.Module):
             [torch.arange(batch_size).unsqueeze(1)]
             * (clicks_pad_size + non_click_pad_size),
             dim=1,
+        ).to(
+            history.device
         )  # dims: [batch_size, num_clicks + num_non_clicks]
+        relevance_mask = relevance_mask.to(history.device)
         indexes = indexes[relevance_mask]
         return indexes, relevance, target
 

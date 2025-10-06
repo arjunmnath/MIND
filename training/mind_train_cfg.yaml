@@ -4,7 +4,7 @@ data_config:
   precompute: true
 trainer_config:
   max_epochs: 10
-  batch_size: 256
+  batch_size: 128
   data_loader_workers: 4
   grad_norm_clip: 1.0
   snapshot_path: snapshot.pt

@@ -45,6 +45,7 @@ def ddp_setup():
     backend = torch.distributed.get_default_backend_for_device(device)
     init_process_group(backend=backend)
     torch.accelerator.set_device_index(rank)
+    return device
 
 
 def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
@@ -89,7 +90,7 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
 
 @hydra.main(version_base=None, config_path=".", config_name="mind_train_cfg.yaml")
 def main(cfg: DictConfig):
-    ddp_setup()
+    device = ddp_setup()
 
     # configs
     opt_cfg = OptimizerConfig(**cfg["optimizer_config"])
@@ -97,8 +98,12 @@ def main(cfg: DictConfig):
     trainer_cfg = TrainingConfig(**cfg["trainer_config"])
     mlflow_cfg = MLFlowConfig(**cfg["mlflow"])
 
-    mlflow.set_tracking_uri(mlflow_cfg.tracking_uri)
-    mlflow.set_experiment("/Users/dev.arjunmnath@gmail.com/mind-recommendation-system")
+    rank = int(os.environ["LOCAL_RANK"])
+    if rank == 0:
+        mlflow.set_tracking_uri("databricks")
+        mlflow.set_experiment(
+            "/Users/dev.arjunmnath@gmail.com/mind-recommendation-system"
+        )
 
     model, optimizer, loss_fn, metrices, train_data, test_data = get_train_objs(
         data_cfg, opt_cfg
@@ -112,21 +117,40 @@ def main(cfg: DictConfig):
         train_dataset=train_data,
         test_dataset=test_data,
     )
-    with mlflow.start_run() as run:
-        params = {
-            "learning_rate": opt_cfg.learning_rate,
-            "batch_size": trainer_cfg.batch_size,
-            "loss_function": loss_fn.__class__.__name__,
-            "metrics": [metric.__class__.__name__ for metric in metrices],
-            "optimizer": "AdamW",
-        }
-        mlflow.log_params(params)
-        with open("model_summary.txt", "w") as f:
-            f.write(str(summary(model)))
-        mlflow.log_artifact("model_summary.txt")
+    if rank == 0:
+        with mlflow.start_run() as run:
+            params = {
+                "learning_rate": opt_cfg.learning_rate,
+                "batch_size": trainer_cfg.batch_size,
+                "loss_function": loss_fn.__class__.__name__,
+                "metrics": [metric.__class__.__name__ for metric in metrices],
+                "optimizer": "AdamW",
+            }
+            mlflow.log_params(params)
+            click_padding = 35
+            history_padding = 558
+            non_click_padding = 297
+
+            with open("model_summary.txt", "w") as f:
+                f.write(
+                    str(
+                        summary(
+                            model,
+                            [
+                                (64, history_padding, 768),
+                                (64, click_padding, 768),
+                                (64, non_click_padding, 768),
+                            ],
+                            device=device,
+                        )
+                    )
+                )
+            mlflow.log_artifact("model_summary.txt")
+            trainer.train()
+            model_info = mlflow.pytorch.log_model(model, name="model")
+            print(model_info)
+    else:
         trainer.train()
-        model_info = mlflow.pytorch.log_model(model, name="model")
-        print(model_info)
     destroy_process_group()
 
 
