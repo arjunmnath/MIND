@@ -78,16 +78,12 @@ class Mind(Dataset):
         """
         items = self.df.iloc[idx]
         return (
-            zip(
-                *items[["clicks", "non_clicks", "history"]].apply(
-                    self._get_batch_embeddings, axis=1
-                )
+            items[["clicks", "non_clicks", "history"]].apply(
+                self._get_batch_embeddings, axis=1
             )
             if self.precompute
-            else zip(
-                *self.df[["clicks", "non_clicks", "history"]].apply(
-                    self._get_batch_news, axis=1
-                )
+            else self.df[["clicks", "non_clicks", "history"]].apply(
+                self._get_batch_news, axis=1
             )
         )
 

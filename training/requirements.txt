@@ -4,8 +4,8 @@ tokenizers
 tqdm
 transformers
 typing_extensions
-mlflow
 torchmetrics
 torchinfo
 boto3
 hydra-core
+mlflow[databricks]>=3.1

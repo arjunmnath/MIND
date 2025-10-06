@@ -1,8 +1,7 @@
 data_config:
   embed_dir: ./model_binaries
   data_dir: ./dataset
-  precompute: false
-
+  precompute: true
 trainer_config:
   max_epochs: 10
   batch_size: 64
@@ -19,7 +18,7 @@ optimizer_config:
   learning_rate: 0.0003
 
 mlflow:
-  tracking_uri: https://dbc-185e84ca-4daa.cloud.databricks.com/
+  tracking_uri: databricks 
 
 hydra:
   run:
