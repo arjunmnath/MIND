@@ -29,8 +29,8 @@ class NewsEncoder(nn.Module):
 
     def __init__(self, embed_dim=768, dropout=0.1, is_vector_input=True):
         super(NewsEncoder, self).__init__()
-
-        self.model = SentenceTransformer("google/embeddinggemma-300m")
+        if not is_vector_input:
+            self.model = SentenceTransformer("google/embeddinggemma-300m")
         self.project = nn.Sequential(
             nn.Linear(embed_dim, embed_dim),
             nn.Dropout(dropout),
@@ -92,7 +92,6 @@ class TwoTowerRecommendation(nn.Module):
             relevance_non_clicks
         )  # [batch_size, num_non_clicks]
 
-        print(relevance_non_clicks, relevance_clicks, sep="\n")
         relevance = torch.cat(
             [relevance_clicks, relevance_non_clicks], dim=1
         )  # dims: [batch_size, num_clicks + num_non_clicks]
@@ -124,7 +123,7 @@ class InfoNCE(nn.Module):
             lenient.
     """
 
-    def __init__(self, temperature=0.07):
+    def __init__(self, temperature=0.03):
         """
         Initializes the InfoNCE loss module with the given temperature.
 

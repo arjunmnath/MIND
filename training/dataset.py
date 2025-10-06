@@ -1,9 +1,12 @@
+from functools import partial
 from pathlib import Path
 from typing import List, Union
 
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from models import TwoTowerRecommendation
+from models.models import InfoNCE
+from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 tqdm.pandas()
@@ -47,6 +50,9 @@ class Mind(Dataset):
         ), "behaviour_path or news_path does not exist"
         self.df = pd.read_csv(behaviour_path.absolute().as_posix())
         self.precompute = precompute
+        self.click_padding = 35
+        self.history_padding = 558
+        self.non_click_padding = 297
         if precompute:
             assert embed_dir is not None, "embedding directory is required"
             embed_path = embed_dir / "embedding.pth"
@@ -76,34 +82,29 @@ class Mind(Dataset):
             Union[tuple, List[tuple]]: A tuple containing the preprocessed history, clicks, and non-clicks data
                                        if an integer index is given, or a list of tuples for a slice.
         """
-        items = self.df.iloc[idx]
-        return (
-            items[["clicks", "non_clicks", "history"]].apply(
-                self._get_batch_embeddings, axis=1
-            )
-            if self.precompute
-            else self.df[["clicks", "non_clicks", "history"]].apply(
-                self._get_batch_news, axis=1
-            )
+        items = (
+            self.df.iloc[idx : idx + 1] if isinstance(idx, int) else self.df.iloc[idx]
+        )
+        transform = self._get_embeddings if self.precompute else self._get_batch_news
+
+        clicks_transformed = items["clicks"].apply(
+            partial(transform, padding_size=self.click_padding)
+        )
+        non_clicks_transformed = items["non_clicks"].apply(
+            partial(transform, padding_size=self.non_click_padding)
+        )
+        history_transformed = items["history"].apply(
+            partial(transform, padding_size=self.history_padding)
         )
 
-    def _get_batch_embeddings(self, row) -> tuple:
-        """
-        Processes a row of the dataframe and returns the embeddings for clicks, non-clicks, and history.
+        # Stack the tensors to create a batch (if needed)
+        clicks = torch.stack([clicks for clicks in clicks_transformed])
+        non_clicks = torch.stack([non_clicks for non_clicks in non_clicks_transformed])
+        history = torch.stack([history for history in history_transformed])
 
-        Args:
-            row (pd.Series): A row from the dataframe containing the behavior data.
+        return history.squeeze(), clicks.squeeze(), non_clicks.squeeze()
 
-        Returns:
-            tuple: A tuple containing the embeddings for clicks, non-clicks, and history.
-        """
-        return (
-            self._get_embeddings(row["clicks"]),
-            self._get_embeddings(row["non_clicks"]),
-            self._get_embeddings(row["history"]),
-        )
-
-    def _get_batch_news(self, row) -> tuple:
+    def _get_batch_news(self, row) -> List:
         """
         Processes a row of the dataframe and returns the news content for clicks, non-clicks, and history.
 
@@ -111,13 +112,13 @@ class Mind(Dataset):
             row (pd.Series): A row from the dataframe containing the behavior data.
 
         Returns:
-            tuple: A tuple containing the news content for clicks, non-clicks, and history.
+            List: A List containing the news content for clicks, non-clicks, and history.
         """
-        return (
+        return [
             self._get_news_content(row["clicks"]),
             self._get_news_content(row["non_clicks"]),
             self._get_news_content(row["history"]),
-        )
+        ]
 
     def _get_news_content(self, ids: str) -> List[str]:
         """
@@ -135,28 +136,47 @@ class Mind(Dataset):
         news = [self.news.loc[article_id]["content"] for article_id in id_list]
         return news
 
-    def _get_embeddings(self, ids: str) -> Union[None, torch.Tensor]:
+    def _get_embeddings(self, ids: str, padding_size: int) -> Union[None, torch.Tensor]:
         """
         Retrieves the embeddings for the given article IDs.
 
         Args:
             ids (str): A string of space-separated article IDs.
+            padding_size (int): The padding to be applied on the sequence dimension.
 
         Returns:
             torch.Tensor: A tensor of embeddings for the given article IDs.
             None: If no valid embeddings are found.
         """
+        padded_tensor = torch.zeros(padding_size, 768)
         if isinstance(ids, float) and pd.isna(ids):
-            return torch.tensor([])
+            return padded_tensor
         id_list = ids.strip().split(" ")
         try:
-            embeds = [
-                self.embed[article_id]
-                for article_id in id_list
-                if article_id in self.embed
-            ]
-            if embeds:
-                return torch.stack(embeds, dim=0)
+            i = 0
+            for article_id in id_list:
+                if article_id in self.embed:
+                    padded_tensor[i] = self.embed[article_id]
+                    i += 1
         except KeyError:
-            return torch.tensor([])
-        return torch.tensor([])
+            return padded_tensor
+        return padded_tensor
+
+
+if __name__ == "__main__":
+    from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
+
+    dataset = Mind(
+        Path("./dataset") / "test",
+        True,
+        Path("./model_binaries") / "test",
+    )
+    loader = DataLoader(dataset, batch_size=64)
+    model = TwoTowerRecommendation()
+    ndcg = RetrievalNormalizedDCG()
+    loss = InfoNCE()
+    for iter, (history, clicks, non_clicks) in enumerate(loader):
+        indexes, relevance, target = model(history, clicks, non_clicks)
+        print(ndcg(relevance, target, indexes=indexes))
+        print(loss(relevance, target))
+        break
