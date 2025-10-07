@@ -43,6 +43,7 @@ class Trainer:
 
         self.epochs_run = 0
         self.model = model.to(self.local_rank)
+        self.model.apply(self.init_weights)
         self.optimizer = optimizer
         self.save_every = self.config.save_every
 
@@ -121,13 +122,20 @@ class Trainer:
                 )
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
+                for name, param in self.model.named_parameters():
+                    if param.grad is not None:
+                        grad_mean = param.grad.abs().mean().item()
+                        grad_max = param.grad.abs().max().item()
+                        print(
+                            f"Gradients for {name} - Mean: {grad_mean:.4f}, Max: {grad_max:.4f}"
+                        )
+
             else:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.config.grad_norm_clip
                 )
                 self.optimizer.step()
-
         return metrices, loss.item()
 
     def _run_epoch(self, epoch: int, dataloader: DataLoader, train: bool = True):
@@ -146,7 +154,7 @@ class Trainer:
             metrices, batch_loss = self._run_batch(history, clicks, non_clicks, train)
             if iter % 100 == 0:
                 print(
-                    f"[RANK{self.global_rank}] Epoch {epoch} | Iter {iter} | {step_type} Loss {batch_loss:.5f} |"
+                    f"[RANK {self.global_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
                     f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f}"
                 )
                 if self.local_rank == 0:
@@ -164,3 +172,9 @@ class Trainer:
             # eval run
             if self.test_loader:
                 self._run_epoch(epoch, self.test_loader, train=False)
+
+    def init_weights(self, m):
+        if isinstance(m, torch.nn.Linear):
+            torch.nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            if m.bias is not None:
+                torch.nn.init.zeros_(m.bias)

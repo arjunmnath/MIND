@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,7 +33,7 @@ class NewsEncoder(nn.Module):
             nn.Linear(embed_dim, embed_dim, bias=False),
             nn.Dropout(dropout),
             nn.LayerNorm(embed_dim),
-            nn.SiLU(),
+            nn.ReLU(),
         )
         self.is_vector_input = is_vector_input
 
@@ -56,7 +54,11 @@ class NewsEncoder(nn.Module):
             else contents
         )  # shape: [batch_size, 768]
         batch_embeddings = batch_embeddings.clone().detach()
+        if torch.isnan(batch_embeddings).any():
+            print(f"NaN detected before projection in NewsEncoder")
         projections = self.project(batch_embeddings)  # shape: [batch_size, 768]
+        if torch.isnan(batch_embeddings).any():
+            print(f"NaN detected after projection in NewsEncoder")
         return F.normalize(projections, p=2, dim=-1)
 
 
@@ -79,6 +81,7 @@ class TwoTowerRecommendation(nn.Module):
         user_repr = F.normalize(
             user_repr.unsqueeze(1), p=2, dim=-1
         )  # dim: [batch_size, 1, 768]
+
         relevance_clicks_padded = torch.bmm(user_repr, clicks.transpose(1, 2)).squeeze(
             1
         )  # dims: [batch_size, click_pad_size]
@@ -160,14 +163,14 @@ class InfoNCE(nn.Module):
         factor and applying binary cross-entropy loss between the logits and the target labels.
 
         Args:
-            similarities (torch.Tensor): A tensor containing the similarity scores (logits).
-            target (torch.Tensor): A tensor containing the binary target labels (0 or 1).
+            similarities (torch.Tensor): A flat tensor (1-D) containing the similarity scores (logits).
+            target (torch.Tensor): A flat tensor (1-D) containing the binary target labels (0 or 1).
 
         Returns:
             torch.Tensor: The computed InfoNCE loss.
         """
         logits = similarities / self.temperature
-        loss = F.cross_entropy(logits, target)
+        loss = F.binary_cross_entropy_with_logits(logits, target)
         return loss
 
 
@@ -181,5 +184,7 @@ if __name__ == "__main__":
     clicks = torch.randn(batch_size, 1, embed_dims)
     non_clicks = torch.randn(batch_size, 3, embed_dims)
     indexes, preds, target = model(history, clicks, non_clicks)
+    preds += 1
+    print(preds / 0.07, target)
     loss_fn = InfoNCE()
     print(loss_fn(preds, target))

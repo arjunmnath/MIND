@@ -30,7 +30,10 @@ progress_bar = tqdm(range(batch_count), desc="Processing Batches")
 for i in progress_bar:
     batch = contents[i * batch_size : (i + 1) * batch_size]
     batch_embeddings = model.encode(batch, device=device, convert_to_tensor=True)
-    content_embeddings.append(batch_embeddings)
+    if torch.isnan(batch_embeddings).any():
+        print("produced batch embedding has nan values")
+    else:
+        content_embeddings.append(batch_embeddings)
 
 content_embeddings = torch.cat(content_embeddings, dim=0)
 tensor_data = dict(zip(df["news_id"].tolist(), content_embeddings.cpu()))

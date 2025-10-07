@@ -172,23 +172,13 @@ if __name__ == "__main__":
         True,
         Path("./model_binaries") / "test",
     )
-    loader = DataLoader(dataset, batch_size=64)
+    loader = DataLoader(dataset, batch_size=128)
     model = TwoTowerRecommendation()
     ndcg = RetrievalNormalizedDCG()
     click_padding = 35
     history_padding = 558
     non_click_padding = 297
-    summary(
-        model,
-        [
-            (64, history_padding, 768),
-            (64, click_padding, 768),
-            (64, non_click_padding, 768),
-        ],
-        mode="train",
-    )
-
-    loss = InfoNCE()
+    loss = InfoNCE(temperature=0.003)
     for iter, (history, clicks, non_clicks) in enumerate(loader):
         indexes, relevance, target = model(history, clicks, non_clicks)
         print(ndcg(relevance, target, indexes=indexes))
