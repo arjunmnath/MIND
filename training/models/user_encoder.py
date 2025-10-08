@@ -87,8 +87,14 @@ class AdditiveNewsAttention(nn.Module):
     def __init__(self, news_dim):
         super().__init__()
         self.V_n = nn.Linear(news_dim, news_dim)
-        self.v_n = nn.Parameter(torch.randn(news_dim))
-        self.q_n = nn.Parameter(torch.randn(news_dim))
+        self.v_n = nn.Parameter(torch.zeros(news_dim))
+        self.q_n = nn.Parameter(torch.zeros(news_dim))
+        
+        # Initialize parameters properly
+        nn.init.xavier_uniform_(self.V_n.weight)
+        nn.init.zeros_(self.V_n.bias)
+        nn.init.normal_(self.v_n, mean=0.0, std=0.02)
+        nn.init.normal_(self.q_n, mean=0.0, std=0.02)
 
     def forward(self, news_repr):
         """
