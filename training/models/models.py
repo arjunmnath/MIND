@@ -145,7 +145,7 @@ class InfoNCE(nn.Module):
             lenient.
     """
 
-    def __init__(self, temperature=0.07):
+    def __init__(self, temperature=0.1):
         """
         Initializes the InfoNCE loss module with the given temperature.
 

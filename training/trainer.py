@@ -46,6 +46,11 @@ class Trainer:
         self.model.apply(self.init_weights)
         self.optimizer = optimizer
         self.save_every = self.config.save_every
+        
+        # Add learning rate scheduler
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=self.config.max_epochs, eta_min=1e-6
+        )
 
         if self.config.use_amp:
             self.scaler = GradScaler(self.device_type)
@@ -122,13 +127,6 @@ class Trainer:
                 )
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-                for name, param in self.model.named_parameters():
-                    if param.grad is not None:
-                        grad_mean = param.grad.abs().mean().item()
-                        grad_max = param.grad.abs().max().item()
-                        print(
-                            f"Gradients for {name} - Mean: {grad_mean:.4f}, Max: {grad_max:.4f}"
-                        )
 
             else:
                 loss.backward()
@@ -153,20 +151,23 @@ class Trainer:
                 self.model.eval()
             metrices, batch_loss = self._run_batch(history, clicks, non_clicks, train)
             if iter % 100 == 0:
+                current_lr = self.optimizer.param_groups[0]['lr']
                 print(
                     f"[RANK {self.global_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
-                    f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f}"
+                    f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
                 )
                 if self.local_rank == 0:
                     mlflow.log_metric("loss", batch_loss, step=iter)
                     mlflow.log_metric("auc", metrices[0], step=iter)
                     mlflow.log_metric("ndcg_5", metrices[1], step=iter)
                     mlflow.log_metric("ndcg_10", metrices[2], step=iter)
+                    mlflow.log_metric("learning_rate", current_lr, step=iter)
 
     def train(self):
         for epoch in range(self.epochs_run, self.config.max_epochs):
             epoch += 1
             self._run_epoch(epoch, self.train_loader, train=True)
+            self.scheduler.step()  # Update learning rate
             if self.local_rank == 0 and epoch % self.save_every == 0:
                 self._save_snapshot(epoch)
             # eval run
@@ -178,3 +179,6 @@ class Trainer:
             torch.nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             if m.bias is not None:
                 torch.nn.init.zeros_(m.bias)
+        elif isinstance(m, torch.nn.Parameter):
+            # Initialize attention parameters with small values
+            torch.nn.init.normal_(m, mean=0.0, std=0.02)
