@@ -8,6 +8,7 @@ import torch
 from config_classes import Snapshot, TrainingConfig
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim.lr_scheduler import LinearLR, SequentialLR
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from utils import upload_to_s3
@@ -46,10 +47,17 @@ class Trainer:
         self.model.apply(self.init_weights)
         self.optimizer = optimizer
         self.save_every = self.config.save_every
-        
-        # Add learning rate scheduler
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=self.config.max_epochs, eta_min=1e-6
+
+        warmup_scheduler = LinearLR(self.optimizer, start_factor=0.1, total_iters=100)
+        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=self.config.max_epochs * len(self.train_loader) - 100,
+            eta_min=1e-6,
+        )
+        self.scheduler = SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[100],
         )
 
         if self.config.use_amp:
@@ -150,24 +158,84 @@ class Trainer:
             else:
                 self.model.eval()
             metrices, batch_loss = self._run_batch(history, clicks, non_clicks, train)
+
+            # Update learning rate scheduler per step
+            if train:
+                self.scheduler.step()
+
             if iter % 100 == 0:
-                current_lr = self.optimizer.param_groups[0]['lr']
-                print(
-                    f"[RANK {self.global_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
-                    f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
-                )
+                current_lr = self.optimizer.param_groups[0]["lr"]
+                with torch.no_grad():
+                    indexes, relevance, target = self.model(history, clicks, non_clicks)
+                    relevance_mean = relevance.mean().item()
+                    relevance_std = relevance.std().item()
+                    relevance_min = relevance.min().item()
+                    relevance_max = relevance.max().item()
+                    print(
+                        f"[RANK {self.global_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
+                        f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
+                    )
+                    print(
+                        f"  Relevance stats: mean={relevance_mean:.4f}, std={relevance_std:.4f}, min={relevance_min:.4f}, max={relevance_max:.4f}"
+                    )
+                    print(
+                        f"  Target distribution: {target.sum().item()}/{target.shape[0]} positive samples"
+                    )
                 if self.local_rank == 0:
-                    mlflow.log_metric("loss", batch_loss, step=iter)
-                    mlflow.log_metric("auc", metrices[0], step=iter)
-                    mlflow.log_metric("ndcg_5", metrices[1], step=iter)
-                    mlflow.log_metric("ndcg_10", metrices[2], step=iter)
-                    mlflow.log_metric("learning_rate", current_lr, step=iter)
+                    if train:
+                        mlflow.log_metric(
+                            "train_loss",
+                            batch_loss,
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
+                        mlflow.log_metric(
+                            "train_auc",
+                            metrices[0],
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
+
+                        mlflow.log_metric(
+                            "train_ndcg_5",
+                            metrices[1],
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
+                        mlflow.log_metric(
+                            "train_ndcg_10",
+                            metrices[2],
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
+                        mlflow.log_metric(
+                            "learning",
+                            current_lr,
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
+                    else:
+                        mlflow.log_metric(
+                            "eval_loss",
+                            batch_loss,
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
+                        mlflow.log_metric(
+                            "eval_auc",
+                            metrices[0],
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
+                        mlflow.log_metric(
+                            "eval_ndcg_5",
+                            metrices[1],
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
+                        mlflow.log_metric(
+                            "eval_ndcg_10",
+                            metrices[2],
+                            step=iter * (epoch - 1) + iter % 100,
+                        )
 
     def train(self):
         for epoch in range(self.epochs_run, self.config.max_epochs):
             epoch += 1
             self._run_epoch(epoch, self.train_loader, train=True)
-            self.scheduler.step()  # Update learning rate
+            # Note: scheduler is now called per-step in _run_epoch
             if self.local_rank == 0 and epoch % self.save_every == 0:
                 self._save_snapshot(epoch)
             # eval run

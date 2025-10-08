@@ -92,39 +92,49 @@ class TwoTowerRecommendation(nn.Module):
         )  # dims: [batch_size, non_click_pad_size]
         batch_size, clicks_pad_size = relevance_clicks_padded.shape
         non_click_pad_size = relevance_non_clicks_padded.shape[1]
-        relevance_mask = torch.cat(
-            [relevance_non_clicks_padded, relevance_clicks_padded], dim=1
-        )
-        # Removing the paddings so that it doesn't hinder with bceloss
-        non_zero_clicks_mask = relevance_clicks_padded != 0
-        non_zero_non_clicks_mask = relevance_non_clicks_padded != 0
-        relevance_mask = relevance_mask != 0
 
+        # Create proper padding masks - check if the input embeddings are all zeros (padded)
+        clicks_padding_mask = clicks.sum(dim=-1) == 0  # [batch_size, click_pad_size]
+        non_clicks_padding_mask = (
+            non_clicks.sum(dim=-1) == 0
+        )  # [batch_size, non_click_pad_size]
+
+        # Remove padded positions
         relevance_clicks = relevance_clicks_padded[
-            non_zero_clicks_mask
-        ]  # dim: [click_count]
+            ~clicks_padding_mask
+        ]  # [click_count]
         relevance_non_clicks = relevance_non_clicks_padded[
-            non_zero_non_clicks_mask
-        ]  # dim: [non_click_count]
+            ~non_clicks_padding_mask
+        ]  # [non_click_count]
 
         target_clicks = torch.ones_like(relevance_clicks)  # [click_count]
         target_non_clicks = torch.zeros_like(relevance_non_clicks)  # [num_non_clicks]
         relevance = torch.cat(
             [relevance_clicks, relevance_non_clicks], dim=0
-        )  # dims: [batch_size, num_clicks + num_non_clicks]
+        )  # dims: [num_clicks + num_non_clicks]
         target = torch.cat(
             [target_clicks, target_non_clicks]
-        )  # dims: [batch_size, num_clicks + num_non_clicks]
+        )  # dims: [num_clicks + num_non_clicks]
 
-        indexes = torch.cat(
-            [torch.arange(batch_size).unsqueeze(1)]
-            * (clicks_pad_size + non_click_pad_size),
-            dim=1,
-        ).to(
-            history.device
-        )  # dims: [batch_size, num_clicks + num_non_clicks]
-        relevance_mask = relevance_mask.to(history.device)
-        indexes = indexes[relevance_mask]
+        # Create proper indexes for metrics - each sample gets a unique index
+        num_clicks = relevance_clicks.shape[0]
+        num_non_clicks = relevance_non_clicks.shape[0]
+
+        # Create indexes: clicks get batch indices, non_clicks get batch indices
+        click_batch_indices = []
+        non_click_batch_indices = []
+
+        for batch_idx in range(batch_size):
+            # Count actual clicks and non-clicks for this batch
+            batch_clicks = (~clicks_padding_mask[batch_idx]).sum().item()
+            batch_non_clicks = (~non_clicks_padding_mask[batch_idx]).sum().item()
+
+            click_batch_indices.extend([batch_idx] * batch_clicks)
+            non_click_batch_indices.extend([batch_idx] * batch_non_clicks)
+
+        indexes = torch.tensor(
+            click_batch_indices + non_click_batch_indices, device=history.device
+        )
         return indexes, relevance, target
 
 
@@ -145,7 +155,7 @@ class InfoNCE(nn.Module):
             lenient.
     """
 
-    def __init__(self, temperature=0.1):
+    def __init__(self, temperature=0.5):
         """
         Initializes the InfoNCE loss module with the given temperature.
 
@@ -171,6 +181,7 @@ class InfoNCE(nn.Module):
         """
         logits = similarities / self.temperature
         loss = F.binary_cross_entropy_with_logits(logits, target)
+        print(F.sigmoid(logits), target, loss, sep=" ::: ", end="\r")
         return loss
 
 
@@ -185,6 +196,6 @@ if __name__ == "__main__":
     non_clicks = torch.randn(batch_size, 3, embed_dims)
     indexes, preds, target = model(history, clicks, non_clicks)
     preds += 1
-    print(preds / 0.07, target)
+    print(preds / 0.5, target)
     loss_fn = InfoNCE()
     print(loss_fn(preds, target))
