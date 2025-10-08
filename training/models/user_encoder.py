@@ -1,6 +1,49 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Variable
+
+
+def attention(query, key, value, mask=None, dropout=None):
+    "Compute 'Scaled Dot Product Attention'"
+    d_k = query.size(-1)
+    scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
+    scores = scores.cpu()
+    if mask is not None:
+        scores = scores.masked_fill(Variable(mask) == 0, -1e9).cuda()
+
+    p_attn = F.softmax(scores, dim=-1)
+    if dropout is not None:
+        p_attn = dropout(p_attn)
+
+    return torch.matmul(p_attn, value), p_attn
+
+
+class MultiHeadedAttention(nn.Module):
+    def __init__(self, h, d_model, dropout=0.1):
+        "Take in model size and number of heads."
+        super(MultiHeadedAttention, self).__init__()
+
+        self.d_k = d_model // h
+        self.h = h
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)
+
+    def forward(self, query, key, value, mask=None):
+        if mask is not None:
+            mask = mask.unsqueeze(1)
+        nbatches = query.size(0)
+
+        query, key, value = [
+            x.view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+            for x in (query, key, value)
+        ]
+
+        x, self.attn = attention(query, key, value, mask=mask, dropout=self.dropout)
+        x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
+        return x
 
 
 class NewsLevelMultiHeadSelfAttention(nn.Module):
@@ -89,7 +132,7 @@ class AdditiveNewsAttention(nn.Module):
         self.V_n = nn.Linear(news_dim, news_dim)
         self.v_n = nn.Parameter(torch.zeros(news_dim))
         self.q_n = nn.Parameter(torch.zeros(news_dim))
-        
+
         # Initialize parameters properly
         nn.init.xavier_uniform_(self.V_n.weight)
         nn.init.zeros_(self.V_n.bias)

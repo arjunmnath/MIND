@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -50,15 +51,12 @@ class NewsEncoder(nn.Module):
             self.model.encode(
                 contents, device=next(self.parameters()).device, convert_to_tensor=True
             )
+            .clone()
+            .detach()
             if not self.is_vector_input
             else contents
         )  # shape: [batch_size, 768]
-        batch_embeddings = batch_embeddings.clone().detach()
-        if torch.isnan(batch_embeddings).any():
-            print(f"NaN detected before projection in NewsEncoder")
         projections = self.project(batch_embeddings)  # shape: [batch_size, 768]
-        if torch.isnan(batch_embeddings).any():
-            print(f"NaN detected after projection in NewsEncoder")
         return F.normalize(projections, p=2, dim=-1)
 
 
@@ -67,6 +65,7 @@ class TwoTowerRecommendation(nn.Module):
         super(TwoTowerRecommendation, self).__init__()
         self.user_tower = UserEncoder(768)
         self.news_tower = NewsEncoder()
+        self._cosine_loss = nn.CosineEmbeddingLoss()
 
     def forward(self, history, clicks, non_clicks):
         """
@@ -75,67 +74,35 @@ class TwoTowerRecommendation(nn.Module):
         non_clicks: [batch_size, non_clicks_pad_size, 768]
         """
         history = self.news_tower(history)
-        clicks = self.news_tower(clicks)
+        clicks = self.news_tower(clicks)  # dim: [batch_size, clicks_pad_size, 768]
         non_clicks = self.news_tower(non_clicks)
         user_repr, _ = self.user_tower(history)  # dim: [batch_size, 768]
         user_repr = F.normalize(
             user_repr.unsqueeze(1), p=2, dim=-1
         )  # dim: [batch_size, 1, 768]
-
-        relevance_clicks_padded = torch.bmm(user_repr, clicks.transpose(1, 2)).squeeze(
-            1
-        )  # dims: [batch_size, click_pad_size]
-        relevance_non_clicks_padded = torch.bmm(
-            user_repr, non_clicks.transpose(1, 2)
-        ).squeeze(
-            1
-        )  # dims: [batch_size, non_click_pad_size]
-        batch_size, clicks_pad_size = relevance_clicks_padded.shape
-        non_click_pad_size = relevance_non_clicks_padded.shape[1]
-
-        # Create proper padding masks - check if the input embeddings are all zeros (padded)
-        clicks_padding_mask = clicks.sum(dim=-1) == 0  # [batch_size, click_pad_size]
-        non_clicks_padding_mask = (
-            non_clicks.sum(dim=-1) == 0
-        )  # [batch_size, non_click_pad_size]
-
-        # Remove padded positions
-        relevance_clicks = relevance_clicks_padded[
-            ~clicks_padding_mask
-        ]  # [click_count]
-        relevance_non_clicks = relevance_non_clicks_padded[
-            ~non_clicks_padding_mask
-        ]  # [non_click_count]
-
-        target_clicks = torch.ones_like(relevance_clicks)  # [click_count]
-        target_non_clicks = torch.zeros_like(relevance_non_clicks)  # [num_non_clicks]
-        relevance = torch.cat(
-            [relevance_clicks, relevance_non_clicks], dim=0
-        )  # dims: [num_clicks + num_non_clicks]
-        target = torch.cat(
-            [target_clicks, target_non_clicks]
-        )  # dims: [num_clicks + num_non_clicks]
-
-        # Create proper indexes for metrics - each sample gets a unique index
-        num_clicks = relevance_clicks.shape[0]
-        num_non_clicks = relevance_non_clicks.shape[0]
-
-        # Create indexes: clicks get batch indices, non_clicks get batch indices
-        click_batch_indices = []
-        non_click_batch_indices = []
-
-        for batch_idx in range(batch_size):
-            # Count actual clicks and non-clicks for this batch
-            batch_clicks = (~clicks_padding_mask[batch_idx]).sum().item()
-            batch_non_clicks = (~non_clicks_padding_mask[batch_idx]).sum().item()
-
-            click_batch_indices.extend([batch_idx] * batch_clicks)
-            non_click_batch_indices.extend([batch_idx] * batch_non_clicks)
-
-        indexes = torch.tensor(
-            click_batch_indices + non_click_batch_indices, device=history.device
+        click_pad_size = clicks.shape[1]
+        non_click_pad_size = non_clicks.shape[1]
+        labels_positive = torch.ones(
+            clicks.shape[0], clicks.shape[1], device=user_repr.device
         )
-        return indexes, relevance, target
+        lables_negative = torch.full(
+            (non_clicks.shape[0], non_clicks.shape[1]), -1, device=user_repr.device
+        )
+        impressions = torch.cat([clicks, non_clicks], dim=1)
+        labels = torch.cat([labels_positive, lables_negative], dim=1)
+        loss = self._cosine_loss(
+            user_repr.expand(-1, click_pad_size + non_click_pad_size, 768).reshape(
+                -1, 768
+            ),
+            impressions.reshape(-1, 768),
+            labels.flatten(),
+        )
+
+        assert not torch.isnan(history).any(), "NaNs found in history"
+        assert not torch.isnan(clicks).any(), "NaNs found in clicks"
+        assert not torch.isnan(non_clicks).any(), "NaNs found in non_clicks"
+        assert not torch.isnan(loss).any(), "NaNs found in loss"
+        return (loss, user_repr, impressions, labels)
 
 
 class InfoNCE(nn.Module):
@@ -181,7 +148,6 @@ class InfoNCE(nn.Module):
         """
         logits = similarities / self.temperature
         loss = F.binary_cross_entropy_with_logits(logits, target)
-        print(F.sigmoid(logits), target, loss, sep=" ::: ", end="\r")
         return loss
 
 

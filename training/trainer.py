@@ -6,6 +6,7 @@ import fsspec
 import mlflow
 import torch
 from config_classes import Snapshot, TrainingConfig
+from models.models import InfoNCE
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LinearLR, SequentialLR
@@ -59,23 +60,33 @@ class Trainer:
             schedulers=[warmup_scheduler, cosine_scheduler],
             milestones=[100],
         )
-
-        if self.config.use_amp:
-            self.scaler = GradScaler(self.device_type)
         if self.config.snapshot_path is None:
             self.config.snapshot_path = "snapshot.pt"
         self._load_snapshot()
-
-        self.model = DDP(self.model, device_ids=[self.local_rank])
+        if self.device_type == "cuda":
+            self.model = DDP(self.model, device_ids=[self.local_rank])
+            self.config.use_amp = True
+        if self.config.use_amp:
+            self.scaler = GradScaler(self.device_type)
 
     def _prepare_dataloader(self, dataset: Dataset):
-        return DataLoader(
-            dataset,
-            batch_size=self.config.batch_size,
-            pin_memory=True,
-            shuffle=False,
-            num_workers=self.config.data_loader_workers,
-            sampler=DistributedSampler(dataset),
+        return (
+            DataLoader(
+                dataset,
+                batch_size=self.config.batch_size,
+                pin_memory=True,
+                shuffle=False,
+                num_workers=self.config.data_loader_workers,
+                sampler=DistributedSampler(dataset),
+            )
+            if (self.device_type == "cuda")
+            else DataLoader(
+                dataset,
+                batch_size=self.config.batch_size,
+                pin_memory=True,
+                shuffle=False,
+                num_workers=self.config.data_loader_workers,
+            )
         )
 
     def _load_snapshot(self):
@@ -108,44 +119,66 @@ class Trainer:
 
         print(f"Snapshot saved at epoch {epoch}")
 
-    def _run_batch(
+    def _test_batch(
         self,
         history: torch.Tensor,
         clicks: torch.Tensor,
         non_clicks: torch.Tensor,
-        train: bool = True,
     ) -> Tuple[List[float], float]:
-        with torch.set_grad_enabled(train), torch.amp.autocast(
+        with torch.set_grad_enabled(False), torch.amp.autocast(
             device_type=self.device_type,
             dtype=torch.float16,
             enabled=(self.config.use_amp),
         ):
-            indexes, relevance, target = self.model(history, clicks, non_clicks)
-            loss = self.loss_fn(relevance, target)
+            loss, user_repr, impressions, labels = self.model(
+                history, clicks, non_clicks
+            )
+            indexes, relevance, target = self._prepare_for_metrics(
+                user_repr, impressions, labels
+            )
             metrices = [
                 metric(relevance, target, indexes=indexes) for metric in self.metrices
             ]
+        return metrices, loss.item()
 
-        if train:
-            self.optimizer.zero_grad(set_to_none=True)
+    def _train_batch(
+        self,
+        history: torch.Tensor,
+        clicks: torch.Tensor,
+        non_clicks: torch.Tensor,
+    ) -> Tuple[List[float], float]:
+        with torch.set_grad_enabled(True), torch.amp.autocast(
+            device_type=self.device_type,
+            dtype=torch.bfloat16,
+            enabled=(self.config.use_amp),
+        ):
+            _, user_repr, impressions, labels = self.model(history, clicks, non_clicks)
+            indexes, relevance, target = self._prepare_for_metrics(
+                user_repr, impressions, labels
+            )
+            metrices = [
+                metric(relevance, target, indexes=indexes) for metric in self.metrices
+            ]
+            self.optimizer.zero_grad()
+            loss = self.loss_fn(relevance, target)
             if self.config.use_amp:
                 self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.config.grad_norm_clip
                 )
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-
             else:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.config.grad_norm_clip
                 )
                 self.optimizer.step()
-        return metrices, loss.item()
+            return metrices, loss.item()
 
     def _run_epoch(self, epoch: int, dataloader: DataLoader, train: bool = True):
-        if train:
+        if train and self.device_type == "cuda":
             dataloader.sampler.set_epoch(epoch)
         for iter, (history, clicks, non_clicks) in enumerate(dataloader):
             step_type = "Train" if train else "Eval"
@@ -153,89 +186,39 @@ class Trainer:
             clicks = clicks.to(self.local_rank)
             non_clicks = non_clicks.to(self.local_rank)
             torch.cuda.empty_cache()
-            if train:
-                self.model.train()
-            else:
-                self.model.eval()
-            metrices, batch_loss = self._run_batch(history, clicks, non_clicks, train)
-
-            # Update learning rate scheduler per step
+            metrices, batch_loss = (
+                self._train_batch(history, clicks, non_clicks)
+                if train
+                else self._test_batch(history, clicks, non_clicks)
+            )
             if train:
                 self.scheduler.step()
 
             if iter % 100 == 0:
                 current_lr = self.optimizer.param_groups[0]["lr"]
-                with torch.no_grad():
-                    indexes, relevance, target = self.model(history, clicks, non_clicks)
-                    relevance_mean = relevance.mean().item()
-                    relevance_std = relevance.std().item()
-                    relevance_min = relevance.min().item()
-                    relevance_max = relevance.max().item()
-                    print(
-                        f"[RANK {self.global_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
-                        f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
-                    )
-                    print(
-                        f"  Relevance stats: mean={relevance_mean:.4f}, std={relevance_std:.4f}, min={relevance_min:.4f}, max={relevance_max:.4f}"
-                    )
-                    print(
-                        f"  Target distribution: {target.sum().item()}/{target.shape[0]} positive samples"
-                    )
+                print(
+                    f"[RANK {self.global_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
+                    f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
+                )
                 if self.local_rank == 0:
                     if train:
-                        mlflow.log_metric(
-                            "train_loss",
-                            batch_loss,
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
-                        mlflow.log_metric(
-                            "train_auc",
-                            metrices[0],
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
+                        mlflow.log_metric("train_loss", batch_loss, step=iter)
+                        mlflow.log_metric("train_auc", metrices[0], step=iter)
 
-                        mlflow.log_metric(
-                            "train_ndcg_5",
-                            metrices[1],
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
-                        mlflow.log_metric(
-                            "train_ndcg_10",
-                            metrices[2],
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
-                        mlflow.log_metric(
-                            "learning",
-                            current_lr,
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
+                        mlflow.log_metric("train_ndcg_5", metrices[1], step=iter)
+                        mlflow.log_metric("train_ndcg_10", metrices[2], step=iter)
+                        mlflow.log_metric("learning", current_lr, step=iter)
                     else:
-                        mlflow.log_metric(
-                            "eval_loss",
-                            batch_loss,
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
-                        mlflow.log_metric(
-                            "eval_auc",
-                            metrices[0],
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
-                        mlflow.log_metric(
-                            "eval_ndcg_5",
-                            metrices[1],
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
-                        mlflow.log_metric(
-                            "eval_ndcg_10",
-                            metrices[2],
-                            step=iter * (epoch - 1) + iter % 100,
-                        )
+                        mlflow.log_metric("eval_loss", batch_loss, step=iter)
+                        mlflow.log_metric("eval_auc", metrices[0], step=iter)
+                        mlflow.log_metric("eval_ndcg_5", metrices[1], step=iter)
+                        mlflow.log_metric("eval_ndcg_10", metrices[2], step=iter)
 
     def train(self):
         for epoch in range(self.epochs_run, self.config.max_epochs):
             epoch += 1
             self._run_epoch(epoch, self.train_loader, train=True)
-            # Note: scheduler is now called per-step in _run_epoch
+            mlflow.pytorch.log_model(self.model, "model")
             if self.local_rank == 0 and epoch % self.save_every == 0:
                 self._save_snapshot(epoch)
             # eval run
@@ -250,3 +233,20 @@ class Trainer:
         elif isinstance(m, torch.nn.Parameter):
             # Initialize attention parameters with small values
             torch.nn.init.normal_(m, mean=0.0, std=0.02)
+
+    def _prepare_for_metrics(self, user_repr, impressions, labels):
+        relevance_padded = torch.bmm(user_repr, impressions.transpose(1, 2)).squeeze(
+            1
+        )  # dims: [batch_size, click_pad_size + non_clicks_pad_size]
+        # batch_size, clicks_pad_size = user_repr.shape[0]
+        padding_mask = impressions.sum(dim=-1) == 0  # [batch_size, click_pad_size]
+        relevance = relevance_padded[~padding_mask]  # [click_count]
+        labels = labels[~padding_mask]
+        labels = (labels + 1) / 2
+        indices = []
+        for batch_idx in range(user_repr.shape[0]):
+            batch_impressions = (~padding_mask[batch_idx]).sum().item()
+            indices.extend([batch_idx] * batch_impressions)
+        indexes = torch.tensor(indices, device=user_repr.device, dtype=torch.long)
+        assert indexes.dtype == torch.long
+        return indexes, relevance, labels

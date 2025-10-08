@@ -175,12 +175,10 @@ if __name__ == "__main__":
     loader = DataLoader(dataset, batch_size=128)
     model = TwoTowerRecommendation()
     ndcg = RetrievalNormalizedDCG()
-    click_padding = 35
-    history_padding = 558
-    non_click_padding = 297
     loss = InfoNCE(temperature=0.003)
     for iter, (history, clicks, non_clicks) in enumerate(loader):
-        indexes, relevance, target = model(history, clicks, non_clicks)
-        print(ndcg(relevance, target, indexes=indexes))
-        print(loss(relevance, target))
+        print((clicks.sum(dim=2) != 0).sum(dim=-1))
+        loss, indexes, relevance, target = model(history, clicks, non_clicks)
+        # print(loss(relevance, target))
+
         break
