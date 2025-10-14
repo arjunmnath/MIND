@@ -210,3 +210,5 @@ __marimo__/
 .hydra
 .DS_Store
 *.tsv
+*.onnx
+*.onnx.data

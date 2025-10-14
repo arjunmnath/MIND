@@ -5,7 +5,11 @@ import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 from torchinfo import summary
 
-from .user_encoder import UserEncoder
+try:
+    from .user_encoder import UserEncoder
+
+except ImportError:
+    from user_encoder import UserEncoder
 
 
 class NewsEncoder(nn.Module):
@@ -26,37 +30,24 @@ class NewsEncoder(nn.Module):
         forward(contents): Encodes and projects the input, returning normalized vectors.
     """
 
-    def __init__(self, embed_dim=768, dropout=0.1, is_vector_input=True):
+    def __init__(self, embed_dim=768, dropout=0.1):
         super(NewsEncoder, self).__init__()
-        if not is_vector_input:
-            self.model = SentenceTransformer("google/embeddinggemma-300m")
         self.project = nn.Sequential(
             nn.Linear(embed_dim, embed_dim, bias=False),
             nn.Dropout(dropout),
             nn.LayerNorm(embed_dim),
             nn.ReLU(),
         )
-        self.is_vector_input = is_vector_input
 
-    def forward(self, contents):
+    def forward(self, contents: torch.Tensor) -> torch.Tensor:
         """
         Encodes and projects the input into a normalized vector.
         Args:
-            contents (Union[List[str], torch.Tensor]): Input text or pre-encoded vectors.
-
+            contents (torch.Tensor]): Input pre-encoded vectors.
         Returns:
             torch.Tensor: Normalized projected vectors.
         """
-        batch_embeddings = (
-            self.model.encode(
-                contents, device=next(self.parameters()).device, convert_to_tensor=True
-            )
-            .clone()
-            .detach()
-            if not self.is_vector_input
-            else contents
-        )  # shape: [batch_size, 768]
-        projections = self.project(batch_embeddings)  # shape: [batch_size, 768]
+        projections = self.project(contents)  # shape: [batch_size, 768]
         return F.normalize(projections, p=2, dim=-1)
 
 
@@ -152,8 +143,34 @@ class InfoNCE(nn.Module):
 
 
 if __name__ == "__main__":
+    import sys
+
     from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
 
+    if len(sys.argv) > 1 and sys.argv[1] == "--export":
+        user_encoder = UserEncoder(768)
+        news_encoder = NewsEncoder()
+        news_input = torch.randn(32, 768)  # [batch_size, embed_dim]
+        user_input = torch.randn(32, 6, 768)  # [batch_size, n_history, embed_dim]
+        torch.onnx.export(
+            user_encoder,
+            user_input,
+            "user_encoder.onnx",
+            verbose=True,
+            input_names=["history"],
+            output_names=["user_representation"],
+            dynamo=True
+        )
+        torch.onnx.export(
+            news_encoder,
+            news_input,
+            "news_encoder.onnx",
+            verbose=True,
+            input_names=["news_embeddings"],
+            output_names=["news_representation"],
+            dynamo=True
+        )
+        exit(0)
     model = TwoTowerRecommendation()
     batch_size = 2
     embed_dims = 768
