@@ -35,6 +35,7 @@ class Mind(Dataset):
         dataset_dir: Path,
         precompute: bool = False,
         embed_dir: Union[Path, None] = None,
+        is_sanity_run: bool = False,
     ) -> None:
         """
         Initializes the Mind dataset by loading behavior data and either embedding data or news data.
@@ -54,6 +55,7 @@ class Mind(Dataset):
         self.click_padding = 35
         self.history_padding = 558
         self.non_click_padding = 297
+        self.is_sanity_run = is_sanity_run
         if precompute:
             assert embed_dir is not None, "embedding directory is required"
             embed_path = embed_dir / "embedding.pth"
@@ -70,7 +72,7 @@ class Mind(Dataset):
         Returns:
             int: Total number of samples in the dataset.
         """
-        return len(self.df)
+        return 1 if self.is_sanity_run else len(self.df)
 
     def __getitem__(self, idx: Union[int, slice]):
         """
@@ -84,10 +86,16 @@ class Mind(Dataset):
                                        if an integer index is given, or a list of tuples for a slice.
         """
         items = (
-            self.df.iloc[idx : idx + 1] if isinstance(idx, int) else self.df.iloc[idx]
+            self.df.iloc[0:1]
+            if self.is_sanity_run
+            else (
+                self.df.iloc[idx : idx + 1]
+                if isinstance(idx, int)
+                else self.df.iloc[idx]
+            )
         )
-        transform = self._get_embeddings if self.precompute else self._get_batch_news
 
+        transform = self._get_embeddings if self.precompute else self._get_batch_news
         clicks_transformed = items["clicks"].apply(
             partial(transform, padding_size=self.click_padding)
         )

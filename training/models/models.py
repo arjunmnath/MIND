@@ -152,6 +152,11 @@ if __name__ == "__main__":
         news_encoder = NewsEncoder()
         news_input = torch.randn(32, 768)  # [batch_size, embed_dim]
         user_input = torch.randn(32, 6, 768)  # [batch_size, n_history, embed_dim]
+        news_dynamic_shapes = {
+            "contents": {
+                0: "batch_size",
+            },
+        }
         torch.onnx.export(
             user_encoder,
             user_input,
@@ -159,16 +164,17 @@ if __name__ == "__main__":
             verbose=True,
             input_names=["history"],
             output_names=["user_representation"],
-            dynamo=True
+            dynamo=True,
         )
         torch.onnx.export(
             news_encoder,
             news_input,
             "news_encoder.onnx",
             verbose=True,
+            dynamic_shapes=news_dynamic_shapes,
             input_names=["news_embeddings"],
             output_names=["news_representation"],
-            dynamo=True
+            dynamo=True,
         )
         exit(0)
     model = TwoTowerRecommendation()

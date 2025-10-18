@@ -65,11 +65,13 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
         dataset_dir=data_dir / "train",
         precompute=data_cfg.precompute,
         embed_dir=embed_dir / "train",
+        is_sanity_run=True,
     )
     test_dataset = Mind(
         dataset_dir=data_dir / "test",
         precompute=data_cfg.precompute,
         embed_dir=embed_dir / "test",
+        is_sanity_run=True,
     )
     loss_fn = InfoNCE()
     auc_roc = RetrievalAUROC()

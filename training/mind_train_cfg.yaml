@@ -3,7 +3,7 @@ data_config:
   data_dir: ./dataset
   precompute: true
 trainer_config:
-  max_epochs: 10
+  max_epochs: 1000
   batch_size: 64
   data_loader_workers: 4
   grad_norm_clip: 1.0
@@ -15,7 +15,7 @@ trainer_config:
 
 optimizer_config:
   weight_decay: 0.01
-  learning_rate: 0.001
+  learning_rate: 1 
 
 mlflow:
   tracking_uri: databricks
