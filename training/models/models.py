@@ -5,11 +5,57 @@ import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 from torchinfo import summary
 
-try:
-    from .user_encoder import UserEncoder
+# try:
+#     from .user_encoder import UserEncoder
+#
+# except ImportError:
+#     from user_encoder import UserEncoder
+#
 
-except ImportError:
-    from user_encoder import UserEncoder
+
+class UserEncoder(nn.Module):
+    """
+    Complete User Encoder module combining multi-head self-attention.
+    """
+
+    def __init__(self, news_embed_dim, num_heads=16):
+        super().__init__()
+
+        assert (
+            news_embed_dim % num_heads == 0
+        ), f"news_embed_dim ({news_embed_dim}) must be divisible by num_heads ({num_heads})"
+
+        # Define the multi-head self-attention layer
+        self.attention = nn.MultiheadAttention(
+            embed_dim=news_embed_dim, num_heads=num_heads
+        )
+
+        # Optionally, use a linear layer to project the output to the desired representation size
+        self.fc = nn.Linear(news_embed_dim, news_embed_dim)
+
+    def forward(self, news_embeds: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            news_embeds: (batch_size, num_news, news_embed_dim)
+                        - embeddings of news browsed by users
+        Returns:
+            user_repr: (batch_size, news_embed_dim) - user representation
+            attention_weights: (batch_size, num_news) - news importance weights
+        """
+        news_embeds = news_embeds.transpose(
+            0, 1
+        )  # (num_news, batch_size, news_embed_dim)
+        attn_output, attn_weights = self.attention(
+            news_embeds,
+            news_embeds,
+            news_embeds,
+            need_weights=True,
+            average_attn_weights=False,
+        )
+        attn_output = attn_output * ((mask.mT.unsqueeze(2)).float())
+        user_repr = attn_output.mean(dim=0)
+        user_repr = self.fc(user_repr)
+        return user_repr, attn_weights
 
 
 class NewsEncoder(nn.Module):
@@ -24,7 +70,6 @@ class NewsEncoder(nn.Module):
         embed_dim (int): Dimension of the input embeddings (default 768).
         hidden_dim (int): Hidden dimension for the projection layer (default 128).
         dropout (float): Dropout rate (default 0.1).
-        is_vector_input (bool): Whether the input is pre-encoded vectors (default True).
 
     Methods:
         forward(contents): Encodes and projects the input, returning normalized vectors.
@@ -33,13 +78,13 @@ class NewsEncoder(nn.Module):
     def __init__(self, embed_dim=768, dropout=0.1):
         super(NewsEncoder, self).__init__()
         self.project = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim, bias=False),
+            nn.Linear(embed_dim, embed_dim),
             nn.Dropout(dropout),
             nn.LayerNorm(embed_dim),
             nn.ReLU(),
         )
 
-    def forward(self, contents: torch.Tensor) -> torch.Tensor:
+    def forward(self, contents: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
         Encodes and projects the input into a normalized vector.
         Args:
@@ -48,7 +93,8 @@ class NewsEncoder(nn.Module):
             torch.Tensor: Normalized projected vectors.
         """
         projections = self.project(contents)  # shape: [batch_size, 768]
-        return F.normalize(projections, p=2, dim=-1)
+        projections = projections * mask.unsqueeze(2).float()
+        return F.normalize(contents + projections, p=2, dim=-1)
 
 
 class TwoTowerRecommendation(nn.Module):
@@ -57,6 +103,8 @@ class TwoTowerRecommendation(nn.Module):
         self.user_tower = UserEncoder(768)
         self.news_tower = NewsEncoder()
         self._cosine_loss = nn.CosineEmbeddingLoss()
+        self._infonce = InfoNCE()
+        self.apply(self.init_weights)
 
     def forward(self, history, clicks, non_clicks):
         """
@@ -64,53 +112,61 @@ class TwoTowerRecommendation(nn.Module):
         clicks: [batch_size, clicks_pad_size, 768]
         non_clicks: [batch_size, non_clicks_pad_size, 768]
         """
-        history = self.news_tower(history)
-        clicks = self.news_tower(clicks)  # dim: [batch_size, clicks_pad_size, 768]
-        non_clicks = self.news_tower(non_clicks)
-        user_repr, _ = self.user_tower(history)  # dim: [batch_size, 768]
+        batch_size = clicks.shape[0]
+        history_mask = history.sum(dim=-1) != 0
+        click_mask = clicks.sum(dim=-1) != 0
+        non_click_mask = non_clicks.sum(dim=-1) != 0
+        seq_len = history_mask.long().sum().item()
+        click_seq_len = click_mask.long().sum().item()
+        non_click_seq_len = non_click_mask.long().sum().item()
+        history = self.news_tower(
+            history, mask=history_mask
+        )  # dim: [batch_size, seq_len, 768]
+        clicks = self.news_tower(
+            clicks, mask=click_mask
+        )  # dim: [batch_size, num_clicks, 768]
+        non_clicks = self.news_tower(
+            non_clicks, mask=non_click_mask
+        )  # dim: [batch_size, num_non_clicks, 768]
+        user_repr, attn_scores = self.user_tower(
+            history, mask=history_mask
+        )  # dim: [batch_size, 768]
         user_repr = F.normalize(
             user_repr.unsqueeze(1), p=2, dim=-1
         )  # dim: [batch_size, 1, 768]
-        click_pad_size = clicks.shape[1]
-        non_click_pad_size = non_clicks.shape[1]
-        labels_positive = torch.ones(
-            clicks.shape[0], clicks.shape[1], device=user_repr.device
-        )
+        labels_positive = torch.ones(batch_size, click_seq_len, device=user_repr.device)
         lables_negative = torch.full(
-            (non_clicks.shape[0], non_clicks.shape[1]), -1, device=user_repr.device
+            (batch_size, non_click_seq_len), -1, device=user_repr.device
         )
-        impressions = torch.cat([clicks, non_clicks], dim=1)
+        impressions = torch.cat(
+            [
+                clicks[click_mask].view(1, -1, 768),
+                non_clicks[non_click_mask].view(1, -1, 768),
+            ],
+            dim=1,
+        )
         labels = torch.cat([labels_positive, lables_negative], dim=1)
-        loss = self._cosine_loss(
-            user_repr.expand(-1, click_pad_size + non_click_pad_size, 768).reshape(
+        loss1 = self._cosine_loss(
+            user_repr.expand(-1, click_seq_len + non_click_seq_len, 768).reshape(
                 -1, 768
             ),
             impressions.reshape(-1, 768),
             labels.flatten(),
         )
+        # loss2 = self._infonce(user_repr, impressions, (labels + 1) / 2)
+        return (loss1, user_repr, impressions, labels, attn_scores, seq_len)
 
-        assert not torch.isnan(history).any(), "NaNs found in history"
-        assert not torch.isnan(clicks).any(), "NaNs found in clicks"
-        assert not torch.isnan(non_clicks).any(), "NaNs found in non_clicks"
-        assert not torch.isnan(loss).any(), "NaNs found in loss"
-        return (loss, user_repr, impressions, labels)
+    def init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
 
 class InfoNCE(nn.Module):
-    """Partial Implementation of the InfoNCE (Information Noise Contrastive Estimation) loss function.
-
-    Paper: https://arxiv.org/pdf/1807.03748#page=3
-
-    This loss function is commonly used in contrastive learning, where the goal is to
-    distinguish between similar and dissimilar pairs of data points. The loss encourages
-    the model to assign a higher similarity score to positive pairs and a lower similarity
-    score to negative pairs.
-
-    Args:
-        temperature (float, optional): A scaling factor that adjusts the distribution
-            of similarities. Default is 0.07. Lower values make the model more sensitive
-            to small differences in similarity, while higher values make the model more
-            lenient.
+    """
+    InfoNCE (Information Noise Contrastive Estimation) loss.
+    Paper: https://arxiv.org/abs/1807.03748
     """
 
     def __init__(self, temperature=0.5):
@@ -123,22 +179,30 @@ class InfoNCE(nn.Module):
         super(InfoNCE, self).__init__()
         self.temperature = temperature
 
-    def forward(self, similarities: torch.Tensor, target: torch.Tensor):
+    def forward(self, query: torch.Tensor, key: torch.Tensor, labels: torch.Tensor):
         """
         Compute the InfoNCE loss.
 
-        The loss is computed by scaling the similarity scores (logits) by the temperature
-        factor and applying binary cross-entropy loss between the logits and the target labels.
+        Assumes positive pairs are aligned by index (query[i] matches key[i])
 
         Args:
-            similarities (torch.Tensor): A flat tensor (1-D) containing the similarity scores (logits).
-            target (torch.Tensor): A flat tensor (1-D) containing the binary target labels (0 or 1).
-
+            query: Tensor of shape (batch_size, embedding_dim)
+            key: Tensor of shape (batch_size, embedding_dim)
+            labels: (batch_size, num_impressions) - binary matrix where 1=positive, 0=negative
         Returns:
             torch.Tensor: The computed InfoNCE loss.
+
         """
-        logits = similarities / self.temperature
-        loss = F.binary_cross_entropy_with_logits(logits, target)
+        query = F.normalize(query, dim=1)
+        key = F.normalize(key, dim=1)
+
+        logits = (query @ key.mT).squeeze(1)
+        # sigmoid_logits = (torch.sigmoid(logits) - 0.5) * 2
+        # sigmoid_logits = torch.clamp(sigmoid_logits, min=-1, max=1)
+        loss = -torch.mean(
+            labels.float() * torch.log(logits)
+            + (1 - labels.float()) * torch.log(1 - logits)
+        )
         return loss
 
 

@@ -5,13 +5,15 @@ from typing import List, Tuple
 import fsspec
 import mlflow
 import torch
-from config_classes import Snapshot, TrainingConfig
-from models.models import InfoNCE
+import torch.distributed as dist
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LinearLR, SequentialLR
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
+
+from config_classes import Snapshot, TrainingConfig
+from models.models import InfoNCE
 from utils import upload_to_s3
 
 
@@ -25,14 +27,14 @@ class Trainer:
         metrices,
         train_dataset: Dataset,
         test_dataset: Dataset,
+        use_ddp: bool = True,
     ):
         self.config = config
         self.model = model
         self.loss_fn = loss_fn
         self.metrices = metrices
-        self.local_rank = int(os.environ["LOCAL_RANK"])
-        self.global_rank = int(os.environ["RANK"])
-
+        self.local_rank = dist.get_rank() if use_ddp else 0
+        self.use_ddp = use_ddp
         self.acc = torch.accelerator.current_accelerator()
         self.device: torch.device = torch.device(f"{self.acc}:{self.local_rank}")
         self.device_type = self.device.type
@@ -63,7 +65,7 @@ class Trainer:
         if self.config.snapshot_path is None:
             self.config.snapshot_path = "snapshot.pt"
         self._load_snapshot()
-        if self.device_type == "cuda":
+        if self.device_type == "cuda" and self.use_ddp:
             self.model = DDP(self.model, device_ids=[self.local_rank])
             self.config.use_amp = True
         if self.config.use_amp:
@@ -77,7 +79,7 @@ class Trainer:
                 pin_memory=True,
                 shuffle=False,
                 num_workers=self.config.data_loader_workers,
-                sampler=DistributedSampler(dataset),
+                sampler=DistributedSampler(dataset) if self.use_ddp else None,
             )
             if (self.device_type == "cuda")
             else DataLoader(
@@ -130,7 +132,7 @@ class Trainer:
             dtype=torch.float16,
             enabled=(self.config.use_amp),
         ):
-            loss, user_repr, impressions, labels = self.model(
+            loss, user_repr, impressions, labels, attn_score, seq_len = self.model(
                 history, clicks, non_clicks
             )
             indexes, relevance, target = self._prepare_for_metrics(
@@ -152,8 +154,10 @@ class Trainer:
             dtype=torch.bfloat16,
             enabled=(self.config.use_amp),
         ):
-            _, user_repr, impressions, labels = self.model(history, clicks, non_clicks)
-            print(impressions, labels)
+            loss, user_repr, impressions, labels, attn_score, seq_len = self.model(
+                history, clicks, non_clicks
+            )
+            print(user_repr @ impressions.mT, labels)
             indexes, relevance, target = self._prepare_for_metrics(
                 user_repr, impressions, labels
             )
@@ -161,7 +165,6 @@ class Trainer:
                 metric(relevance, target, indexes=indexes) for metric in self.metrices
             ]
             self.optimizer.zero_grad()
-            loss = self.loss_fn(relevance, target)
             if self.config.use_amp:
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
@@ -198,7 +201,7 @@ class Trainer:
             # if iter % 100 == 0:
             #     current_lr = self.optimizer.param_groups[0]["lr"]
             #     print(
-            #         f"[RANK {self.global_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
+            #         f"[RANK {self.local_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
             #         f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
             #     )
             #     if self.local_rank == 0:

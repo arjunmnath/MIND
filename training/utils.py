@@ -3,9 +3,12 @@ import random
 from urllib.parse import urlparse
 
 import boto3
+import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
+import seaborn as sns
 import torch
+
 from config_classes import OptimizerConfig
 
 
@@ -128,3 +131,73 @@ def set_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def plot_attention_scores(
+    attn_weights,
+    non_padded_size,
+    head_idx=None,
+    figsize=(10, 8),
+    save_path=None,
+    title=None,
+):
+    """
+    Plot attention scores from nn.MultiheadAttention for a single sample.
+
+    Args:
+        attn_weights: Attention weights tensor of shape (batch, num_heads, seq_len, seq_len)
+                     or (num_heads, seq_len, seq_len) if batch already removed
+        head_idx: Index of specific attention head to plot. If None, plots all heads.
+        figsize: Figure size for the plot
+        save_path: Path to save the figure. If None, displays the plot.
+        title: Custom title for the plot
+
+    Returns:
+        fig, axes: Matplotlib figure and axes objects
+    """
+    # Convert to numpy and handle batch dimension
+    if isinstance(attn_weights, torch.Tensor):
+        attn_weights = attn_weights.detach().cpu().numpy()
+
+    # Remove batch dimension if present
+    if attn_weights.ndim == 4:
+        attn_weights = attn_weights[0]  # Take first sample
+    attn_weights = attn_weights[:, :non_padded_size, :non_padded_size]
+    num_heads, seq_len, _ = attn_weights.shape
+    # Plot specific head or all heads
+    if head_idx is not None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        im = ax.imshow(attn_weights[head_idx], cmap="viridis", aspect="auto")
+        ax.set_xlabel("Key Position")
+        ax.set_ylabel("Query Position")
+        ax.set_title(title or f"Attention Scores - Head {head_idx}")
+        plt.colorbar(im, ax=ax, label="Attention Weight")
+    else:
+        # Plot all heads in a grid
+        cols = min(4, num_heads)
+        rows = (num_heads + cols - 1) // cols
+        fig, axes = plt.subplots(rows, cols, figsize=figsize)
+        axes = axes.flatten() if num_heads > 1 else [axes]
+
+        for i in range(num_heads):
+            im = axes[i].imshow(attn_weights[i], cmap="viridis", aspect="auto")
+            axes[i].set_xlabel("Key Position")
+            axes[i].set_ylabel("Query Position")
+            axes[i].set_title(f"Head {i}")
+            plt.colorbar(im, ax=axes[i], label="Attn Weight")
+
+        # Hide extra subplots
+        for i in range(num_heads, len(axes)):
+            axes[i].axis("off")
+
+        if title:
+            fig.suptitle(title, fontsize=16, y=1.02)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight", dpi=150)
+    else:
+        plt.show()
+
+    return fig, axes if head_idx is None else ax
