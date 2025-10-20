@@ -8,6 +8,7 @@ import mlflow
 import numpy as np
 import seaborn as sns
 import torch
+import torch.nn as nn
 
 from config_classes import OptimizerConfig
 
@@ -18,45 +19,6 @@ def upload_to_s3(obj, dst):
     buffer.seek(0)
     dst = urlparse(dst)
     boto3.client("s3").upload_fileobj(buffer, dst.netloc, dst.path.lstrip("/"))
-
-
-def evaluate(dataloader, model, loss_fn, auc_roc, ndcg_5, ndcg_10, epoch, device):
-    """Evaluate the model on a single pass of the dataloader.
-
-    Args:
-        dataloader: an instance of `torch.utils.data.DataLoader`, containing the eval data.
-        model: an instance of `torch.nn.Module`, the model to be trained.
-        loss_fn: a callable, the loss function.
-        metrics_fn: a callable, the metrics function.
-        epoch: an integer, the current epoch number.
-    """
-    num_batches = len(dataloader)
-    model.eval()
-    eval_loss = 0
-    eval_auc = 0
-    eval_ndcg_5 = 0
-    eval_ndcg_10 = 0
-    with torch.no_grad():
-        for X, y in dataloader:
-            X = X.to(device)
-            y = y.to(device)
-            pred = model(X)
-            eval_loss += loss_fn(pred, y).item()
-            eval_auc += auc_roc(pred, y)
-            eval_ndcg_5 += ndcg_5(pred, y)
-            eval_ndcg_10 += ndcg_10(pred, y)
-
-    eval_loss /= num_batches
-    eval_auc /= num_batches
-    eval_ndcg_5 /= num_batches
-    eval_ndcg_10 /= num_batches
-    mlflow.log_metric("eval_loss", eval_loss, step=epoch)
-    mlflow.log_metric("eval_auc", eval_auc, step=epoch)
-    mlflow.log_metric("eval_ndcg_5", eval_ndcg_5, step=epoch)
-    mlflow.log_metric("eval_ndcg_10", eval_ndcg_10, step=epoch)
-    print(
-        f"Eval metrics: AUC ROC: {eval_auc:.4f}, Eval NDCG@5: {eval_ndcg_5:.4f}, Eval NDCG@10: {eval_ndcg_10:.4f}, Avg loss: {eval_loss:.4f} "
-    )
 
 
 def create_optimizer(model: torch.nn.Module, opt_config: OptimizerConfig):
@@ -83,7 +45,7 @@ def create_optimizer(model: torch.nn.Module, opt_config: OptimizerConfig):
             elif pn.endswith("weight") and isinstance(m, whitelist_weight_modules):
                 # weights of whitelist modules will be weight decayed
                 decay.add(fpn)
-            elif pn.endswith("in_proj_weight"):
+            elif pn.endswith("in_proj_weight") or pn.endswith("temporal_decay"):
                 # MHA projection layer
                 decay.add(fpn)
             elif pn.endswith("weight") and isinstance(m, blacklist_weight_modules):
@@ -93,7 +55,6 @@ def create_optimizer(model: torch.nn.Module, opt_config: OptimizerConfig):
                 # positional embedding shouldn't be decayed
                 no_decay.add(fpn)
             elif pn in ["q_n", "v_n"]:
-                # attention parameters should not be decayed
                 no_decay.add(fpn)
 
     # validate that we considered every parameter
@@ -201,3 +162,55 @@ def plot_attention_scores(
         plt.show()
 
     return fig, axes if head_idx is None else ax
+
+
+def export(
+    user_encoder: nn.Module,
+    news_encoder: nn.Module,
+    user_model_path: str = "user_encoder.onnx",
+    news_encoder_path: str = "news_encoder.onnx",
+) -> None:
+    """
+    Export user_encoder and news_encoder models to ONNX format.
+
+    Args:
+        user_encoder (nn.Module): User encoder model to export.
+        news_encoder (nn.Module): News encoder model to export.
+        user_model_path (str, optional): Path to save the user encoder ONNX model.
+        news_encoder_path (str, optional): Path to save the news encoder ONNX model.
+    """
+    news_input = torch.randn(5, 32, 768)  # [batch_size, embed_dim]
+    user_input = torch.randn(32, 6, 768)  # [batch_size, n_history, embed_dim]
+    user_mask = torch.full((32, 6), True)  # [batch_size, n_history, embed_dim]
+    news_mask = torch.full((5, 32), True)  # [batch_size, n_history, embed_dim]
+    news_dynamic_shapes = {
+        "contents": {
+            0: "batch_size",
+            1: "seq_len",
+        },
+        "mask": {0: "batch_size", 1: "n_news"},
+    }
+    user_dynamic_shapes = {
+        "news_embeds": {0: "batch_size", 1: "n_history"},
+        "mask": {0: "batch_size", 1: "n_history"},
+    }
+    torch.onnx.export(
+        user_encoder,
+        (user_input, user_mask),
+        user_model_path,
+        verbose=True,
+        dynamic_shapes=user_dynamic_shapes,
+        input_names=["history", "mask"],
+        output_names=["user_representation"],
+        dynamo=True,
+    )
+    torch.onnx.export(
+        news_encoder,
+        (news_input, news_mask),
+        news_encoder_path,
+        verbose=True,
+        dynamic_shapes=news_dynamic_shapes,
+        input_names=["news_embeddings", "mask"],
+        output_names=["news_representation"],
+        dynamo=True,
+    )

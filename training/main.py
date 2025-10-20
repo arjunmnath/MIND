@@ -14,7 +14,7 @@ from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
 from config_classes import DataConfig, MLFlowConfig, OptimizerConfig, TrainingConfig
 from dataset import Mind
 from models import *
-from models.models import InfoNCE, TwoTowerRecommendation
+from models.models import TwoTowerRecommendation
 from trainer import Trainer
 from utils import create_optimizer
 
@@ -72,7 +72,6 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
         precompute=data_cfg.precompute,
         embed_dir=embed_dir / "test",
     )
-    loss_fn = InfoNCE()
     auc_roc = RetrievalAUROC()
     ndcg_5 = RetrievalNormalizedDCG(top_k=5)
     ndcg_10 = RetrievalNormalizedDCG(top_k=10)
@@ -82,7 +81,6 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
     return (
         model,
         optimizer,
-        loss_fn,
         [auc_roc, ndcg_5, ndcg_10],
         train_dataset,
         test_dataset,
@@ -106,13 +104,12 @@ def main(cfg: DictConfig):
             "/Users/dev.arjunmnath@gmail.com/mind-recommendation-system"
         )
 
-    model, optimizer, loss_fn, metrices, train_data, test_data = get_train_objs(
+    model, optimizer, metrices, train_data, test_data = get_train_objs(
         data_cfg, opt_cfg
     )
     trainer = Trainer(
         config=trainer_cfg,
         model=model,
-        loss_fn=loss_fn,
         metrices=metrices,
         optimizer=optimizer,
         train_dataset=train_data,
@@ -123,7 +120,7 @@ def main(cfg: DictConfig):
             params = {
                 "learning_rate": opt_cfg.learning_rate,
                 "batch_size": trainer_cfg.batch_size,
-                "loss_function": loss_fn.__class__.__name__,
+                "loss_function": "CosineEmbeddingLoss",
                 "metrics": [metric.__class__.__name__ for metric in metrices],
                 "optimizer": "AdamW",
             }

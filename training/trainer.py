@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 from config_classes import Snapshot, TrainingConfig
-from models.models import InfoNCE
 from utils import upload_to_s3
 
 
@@ -22,7 +21,6 @@ class Trainer:
         self,
         config: TrainingConfig,
         model: torch.nn.Module,
-        loss_fn,
         optimizer,
         metrices,
         train_dataset: Dataset,
@@ -31,7 +29,6 @@ class Trainer:
     ):
         self.config = config
         self.model = model
-        self.loss_fn = loss_fn
         self.metrices = metrices
         self.local_rank = dist.get_rank() if use_ddp else 0
         self.use_ddp = use_ddp
@@ -226,7 +223,14 @@ class Trainer:
         for epoch in range(self.epochs_run, self.config.max_epochs):
             epoch += 1
             self._run_epoch(epoch, self.train_loader, train=True)
-            mlflow.pytorch.log_model(self.model, "model")
+            mlflow.pytorch.log_model(
+                self.model,
+                f"cars-two-tower-e{epoch}",
+                input_example=(
+                    torch.randn(1, 558, 768),
+                    torch.randn((1, 35, 768), torch.randn(1, 297, 768)),
+                ),
+            )
             if self.local_rank == 0 and epoch % self.save_every == 0:
                 self._save_snapshot(epoch)
             # eval run

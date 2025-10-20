@@ -1,1 +1,1 @@
-from .models import InfoNCE, NewsEncoder, TwoTowerRecommendation, UserEncoder
+from .models import NewsEncoder, TwoTowerRecommendation, UserEncoder

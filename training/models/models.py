@@ -20,30 +20,39 @@ class UserEncoder(nn.Module):
     Complete User Encoder module combining multi-head self-attention.
     """
 
-    def __init__(self, news_embed_dim, num_heads=16):
+    def __init__(self, news_embed_dim, max_seq_len=558, num_heads=16, dropout=0.3):
         super().__init__()
 
         assert (
             news_embed_dim % num_heads == 0
         ), f"news_embed_dim ({news_embed_dim}) must be divisible by num_heads ({num_heads})"
-
-        # Define the multi-head self-attention layer
         self.attention = nn.MultiheadAttention(
-            embed_dim=news_embed_dim, num_heads=num_heads
+            embed_dim=news_embed_dim, num_heads=num_heads, dropout=dropout
         )
+        self.position_encoding = nn.Embedding(max_seq_len, news_embed_dim)
+        self.project = nn.Sequential(
+            nn.Linear(news_embed_dim, news_embed_dim),
+            nn.Dropout(dropout),
+            nn.LayerNorm(news_embed_dim),
+            nn.ReLU(),
+        )
+        self.temporal_decay = nn.Embedding(max_seq_len, 1)
 
-        # Optionally, use a linear layer to project the output to the desired representation size
-        self.fc = nn.Linear(news_embed_dim, news_embed_dim)
-
-    def forward(self, news_embeds: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, news_embeds: torch.tensor, mask: torch.tensor = None
+    ) -> torch.tensor:
         """
         Args:
-            news_embeds: (batch_size, num_news, news_embed_dim)
-                        - embeddings of news browsed by users
+            news_embeds: (batch_size, num_news, news_embed_dim) - embeddings of news browsed by users
         Returns:
             user_repr: (batch_size, news_embed_dim) - user representation
             attention_weights: (batch_size, num_news) - news importance weights
         """
+        n_history = news_embeds.shape[1]
+        time_steps = torch.arange(n_history, device=news_embeds.device)
+
+        pos_encodings = self.position_encoding(time_steps).unsqueeze(0)
+        news_embeds = news_embeds + pos_encodings
         news_embeds = news_embeds.transpose(
             0, 1
         )  # (num_news, batch_size, news_embed_dim)
@@ -54,9 +63,16 @@ class UserEncoder(nn.Module):
             need_weights=True,
             average_attn_weights=False,
         )
-        attn_output = attn_output * ((mask.mT.unsqueeze(2)).float())
-        user_repr = attn_output.mean(dim=0)
-        user_repr = self.fc(user_repr)
+        attn_output = (
+            attn_output * ((mask.mT.unsqueeze(2)).float())
+            if mask is not None
+            else attn_output
+        )
+        weighted_sum = torch.sum(
+            attn_output * self.temporal_decay(time_steps).unsqueeze(2),
+            dim=0,
+        )
+        user_repr = self.project(weighted_sum)
         return user_repr, attn_weights
 
 
@@ -86,7 +102,9 @@ class NewsEncoder(nn.Module):
             nn.ReLU(),
         )
 
-    def forward(self, contents: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, contents: torch.Tensor, mask: torch.Tensor = None
+    ) -> torch.Tensor:
         """
         Encodes and projects the input into a normalized vector.
         Args:
@@ -95,7 +113,9 @@ class NewsEncoder(nn.Module):
             torch.Tensor: Normalized projected vectors.
         """
         projections = self.project(contents)  # shape: [batch_size, 768]
-        projections = projections * mask.unsqueeze(2).float()
+        projections = (
+            projections * mask.unsqueeze(2).float() if mask is not None else projections
+        )
         return F.normalize(contents + projections, p=2, dim=-1)
 
 
@@ -105,7 +125,6 @@ class TwoTowerRecommendation(nn.Module):
         self.user_tower = UserEncoder(768)
         self.news_tower = NewsEncoder()
         self._cosine_loss = nn.CosineEmbeddingLoss()
-        self._infonce = InfoNCE()
 
     def forward(self, history, clicks, non_clicks):
         """
@@ -118,6 +137,7 @@ class TwoTowerRecommendation(nn.Module):
         history_mask = history.sum(dim=-1) != 0
         click_mask = clicks.sum(dim=-1) != 0
         non_click_mask = non_clicks.sum(dim=-1) != 0
+        print(click_mask.shape)
         seq_len = history_mask[0].long().sum().item()
         click_seq_len = click_mask.long().sum().item()
         non_click_seq_len = non_click_mask.long().sum().item()
@@ -167,101 +187,3 @@ class TwoTowerRecommendation(nn.Module):
             seq_len,
         )
 
-
-class InfoNCE(nn.Module):
-    """
-    InfoNCE (Information Noise Contrastive Estimation) loss.
-    Paper: https://arxiv.org/abs/1807.03748
-    """
-
-    def __init__(self, temperature=0.5):
-        """
-        Initializes the InfoNCE loss module with the given temperature.
-
-        Args:
-            temperature (float, optional): A scaling factor for similarity logits. Default is 0.07.
-        """
-        super(InfoNCE, self).__init__()
-        self.temperature = temperature
-
-    def forward(self, query: torch.Tensor, key: torch.Tensor, labels: torch.Tensor):
-        """
-        Compute the InfoNCE loss.
-
-        Assumes positive pairs are aligned by index (query[i] matches key[i])
-
-        Args:
-            query: Tensor of shape (batch_size, embedding_dim)
-            key: Tensor of shape (batch_size, embedding_dim)
-            labels: (batch_size, num_impressions) - binary matrix where 1=positive, 0=negative
-        Returns:
-            torch.Tensor: The computed InfoNCE loss.
-
-        """
-        query = F.normalize(query, dim=1)
-        key = F.normalize(key, dim=1)
-
-        logits = (query @ key.mT).squeeze(1)
-        # sigmoid_logits = (torch.sigmoid(logits) - 0.5) * 2
-        # sigmoid_logits = torch.clamp(sigmoid_logits, min=-1, max=1)
-        loss = -torch.mean(
-            labels.float() * torch.log(logits)
-            + (1 - labels.float()) * torch.log(1 - logits)
-        )
-        return loss
-
-
-if __name__ == "__main__":
-    import sys
-
-    from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
-
-    if len(sys.argv) > 1 and sys.argv[1] == "--export":
-        user_encoder = UserEncoder(768)
-        news_encoder = NewsEncoder()
-        news_input = torch.randn(32, 768)  # [batch_size, embed_dim]
-        user_input = torch.randn(32, 6, 768)  # [batch_size, n_history, embed_dim]
-        news_dynamic_shapes = {
-            "contents": {
-                0: "batch_size",
-            },
-        }
-        torch.onnx.export(
-            user_encoder,
-            user_input,
-            "user_encoder.onnx",
-            verbose=True,
-            input_names=["history"],
-            output_names=["user_representation"],
-            dynamo=True,
-        )
-        torch.onnx.export(
-            news_encoder,
-            news_input,
-            "news_encoder.onnx",
-            verbose=True,
-            dynamic_shapes=news_dynamic_shapes,
-            input_names=["news_embeddings"],
-            output_names=["news_representation"],
-            dynamo=True,
-        )
-        exit(0)
-    model = TwoTowerRecommendation()
-    batch_size = 2
-    embed_dims = 768
-    history = torch.randn(batch_size, 6, embed_dims)
-    clicks = torch.randn(batch_size, 1, embed_dims)
-    non_clicks = torch.randn(batch_size, 3, embed_dims)
-    (
-        loss,
-        preds,
-        target,
-        indexes,
-        attn_scores,
-        seq_len,
-    ) = model(history, clicks, non_clicks)
-
-    preds += 1
-    print(preds / 0.5, target)
-    loss_fn = InfoNCE()
-    print(loss_fn(preds, target))

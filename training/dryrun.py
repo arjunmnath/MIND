@@ -30,6 +30,7 @@ nc[1, 2:, :] = 0
 dataset = TensorDataset(h, c, nc)
 loader = DataLoader(dataset, batch_size=64)
 
+
 # data_dir = Path("./dataset")
 # embed_dir = Path("./model_binaries")
 # train_dataset = Mind(
@@ -50,47 +51,30 @@ crit = [
     RetrievalNormalizedDCG(top_k=10),
 ]
 
-dst = 
 
-
-def _save_snapshot(epoch, dst):
-    raw_model = model.module if hasattr(model, "module") else model
-    snapshot = Snapshot(
-        model_state=raw_model.state_dict(),
-        optimizer_state=optimizer.state_dict(),
-        finished_epoch=epoch,
-    )
-    # save snapshot
-    snapshot = asdict(snapshot)
-    upload_to_s3(snapshot, dst)
-    print(f"Snapshot saved at epoch {epoch}")
-
-
-
-# num_epochs = 1000
-# for epoch in range(num_epochs):
-#     model.train()
-#     optimizer.zero_grad()
-#     for iter, (history, clicks, non_clicks) in enumerate(loader):
-#         (
-#             loss,
-#             preds,
-#             target,
-#             indexes,
-#             attn_scores,
-#             seq_len,
-#         ) = model(history, clicks, non_clicks)
-#
-#         metrices = [metric(preds, target, indexes=indexes) for metric in crit]
-#         print(
-#             f"[Step {epoch}:{iter} | train Loss {loss:.5f} |"
-#             f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f}"
-#         )
-#         loss.backward()
-#         optimizer.step()
-#         if epoch == num_epochs - 1:
-#             plot_attention_scores(
-#                 attn_scores,
-#                 title="Multi-Head Attention Scores",
-#                 non_padded_size=seq_len,
-#             )
+num_epochs = 1000
+for epoch in range(num_epochs):
+    model.train()
+    optimizer.zero_grad()
+    for iter, (history, clicks, non_clicks) in enumerate(loader):
+        (
+            loss,
+            preds,
+            target,
+            indexes,
+            attn_scores,
+            seq_len,
+        ) = model(history, clicks, non_clicks)
+        metrices = [metric(preds, target, indexes=indexes) for metric in crit]
+        print(
+            f"[Step {epoch}:{iter} | train Loss {loss:.5f} |"
+            f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f}"
+        )
+        loss.backward()
+        optimizer.step()
+        if epoch == num_epochs - 1:
+            plot_attention_scores(
+                attn_scores,
+                title="Multi-Head Attention Scores",
+                non_padded_size=seq_len,
+            )

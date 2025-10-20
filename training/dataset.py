@@ -9,7 +9,6 @@ from torchinfo import summary
 from tqdm import tqdm
 
 from models import TwoTowerRecommendation
-from models.models import InfoNCE
 
 tqdm.pandas()
 
@@ -184,7 +183,6 @@ if __name__ == "__main__":
     loader = DataLoader(dataset, batch_size=128)
     model = TwoTowerRecommendation()
     ndcg = RetrievalNormalizedDCG()
-    loss = InfoNCE(temperature=0.003)
     for iter, (history, clicks, non_clicks) in enumerate(loader):
         print((clicks.sum(dim=2) != 0).sum(dim=-1))
         (
@@ -195,5 +193,4 @@ if __name__ == "__main__":
             attn_scores,
             seq_len,
         ) = model(history, clicks, non_clicks)
-        # print(loss(relevance, target))
         break
