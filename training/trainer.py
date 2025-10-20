@@ -132,11 +132,17 @@ class Trainer:
             dtype=torch.float16,
             enabled=(self.config.use_amp),
         ):
-            loss, user_repr, impressions, labels, attn_score, seq_len = self.model(
-                history, clicks, non_clicks
-            )
+            (
+                loss,
+                user_repr,
+                impressions,
+                labels,
+                samples_per_batch,
+                attn_score,
+                seq_len,
+            ) = self.model(history, clicks, non_clicks)
             indexes, relevance, target = self._prepare_for_metrics(
-                user_repr, impressions, labels
+                user_repr, impressions, labels, samples_per_batch
             )
             metrices = [
                 metric(relevance, target, indexes=indexes) for metric in self.metrices
@@ -154,12 +160,17 @@ class Trainer:
             dtype=torch.bfloat16,
             enabled=(self.config.use_amp),
         ):
-            loss, user_repr, impressions, labels, attn_score, seq_len = self.model(
-                history, clicks, non_clicks
-            )
-            print(user_repr @ impressions.mT, labels)
+            (
+                loss,
+                user_repr,
+                impressions,
+                labels,
+                samples_per_batch,
+                attn_score,
+                seq_len,
+            ) = self.model(history, clicks, non_clicks)
             indexes, relevance, target = self._prepare_for_metrics(
-                user_repr, impressions, labels
+                user_repr, impressions, labels, samples_per_batch
             )
             metrices = [
                 metric(relevance, target, indexes=indexes) for metric in self.metrices
@@ -232,26 +243,17 @@ class Trainer:
 
     def init_weights(self, m):
         if isinstance(m, torch.nn.Linear):
-            torch.nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             if m.bias is not None:
                 torch.nn.init.zeros_(m.bias)
         elif isinstance(m, torch.nn.Parameter):
             # Initialize attention parameters with small values
             torch.nn.init.normal_(m, mean=0.0, std=0.02)
 
-    def _prepare_for_metrics(self, user_repr, impressions, labels):
-        relevance_padded = torch.bmm(user_repr, impressions.transpose(1, 2)).squeeze(
-            1
-        )  # dims: [batch_size, click_pad_size + non_clicks_pad_size]
-        # batch_size, clicks_pad_size = user_repr.shape[0]
-        padding_mask = impressions.sum(dim=-1) == 0  # [batch_size, click_pad_size]
-        relevance = relevance_padded[~padding_mask]  # [click_count]
-        labels = labels[~padding_mask]
+    def _prepare_for_metrics(self, user_repr, impressions, labels, samples_per_batch):
+        relevance = (user_repr * impressions).sum(dim=-1)
         labels = (labels + 1) / 2
-        indices = []
-        for batch_idx in range(user_repr.shape[0]):
-            batch_impressions = (~padding_mask[batch_idx]).sum().item()
-            indices.extend([batch_idx] * batch_impressions)
-        indexes = torch.tensor(indices, device=user_repr.device, dtype=torch.long)
-        assert indexes.dtype == torch.long
+        indexes = torch.arange(
+            self.config.batch_size, device=user_repr.device, dtype=torch.long
+        )
+        indexes = indexes.repeat_interleave(samples_per_batch, dim=0)
         return indexes, relevance, labels

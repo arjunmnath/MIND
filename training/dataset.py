@@ -4,11 +4,12 @@ from typing import List, Union
 
 import pandas as pd
 import torch
-from models import TwoTowerRecommendation
-from models.models import InfoNCE
 from torch.utils.data import DataLoader, Dataset
 from torchinfo import summary
 from tqdm import tqdm
+
+from models import TwoTowerRecommendation
+from models.models import InfoNCE
 
 tqdm.pandas()
 
@@ -186,7 +187,10 @@ if __name__ == "__main__":
     loss = InfoNCE(temperature=0.003)
     for iter, (history, clicks, non_clicks) in enumerate(loader):
         print((clicks.sum(dim=2) != 0).sum(dim=-1))
-        loss, indexes, relevance, target = model(history, clicks, non_clicks)
+        loss, user_repr, impressions, labels, samples_per_batch, attn_score, seq_len = (
+            model(history, clicks, non_clicks)
+        )
+
         # print(loss(relevance, target))
 
         break
