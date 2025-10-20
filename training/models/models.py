@@ -113,6 +113,7 @@ class TwoTowerRecommendation(nn.Module):
         clicks: [batch_size, clicks_pad_size, 768]
         non_clicks: [batch_size, non_clicks_pad_size, 768]
         """
+        assert history.ndim == 3 and clicks.ndim == 3 and non_clicks.ndim == 3
         batch_size = clicks.shape[0]
         history_mask = history.sum(dim=-1) != 0
         click_mask = clicks.sum(dim=-1) != 0
@@ -137,6 +138,15 @@ class TwoTowerRecommendation(nn.Module):
         )  # dim: [batch_size, 1, 768]
         labels_positive = torch.ones(click_seq_len, device=user_repr.device)
         lables_negative = torch.full((non_click_seq_len,), -1, device=user_repr.device)
+        clicks_per_sample = click_mask.sum(dim=-1)
+        non_clicks_per_sample = non_click_mask.sum(dim=-1)
+        index_positive = torch.arange(
+            batch_size, device=user_repr.device, dtype=torch.long
+        ).repeat_interleave(clicks_per_sample)
+        index_negative = torch.arange(
+            batch_size, device=user_repr.device, dtype=torch.long
+        ).repeat_interleave(non_clicks_per_sample)
+        indexes = torch.cat([index_positive, index_negative], dim=0)
         impressions = torch.cat(
             [
                 clicks[click_mask].view(-1, 768),
@@ -145,15 +155,14 @@ class TwoTowerRecommendation(nn.Module):
             dim=0,
         )
         labels = torch.cat([labels_positive, lables_negative], dim=0)
-        samples_per_batch = click_mask.sum(dim=-1) + non_click_mask.sum(dim=-1)
+        samples_per_batch = clicks_per_sample + non_clicks_per_sample
         user_repr = user_repr.squeeze(1).repeat_interleave(samples_per_batch, dim=0)
         loss1 = self._cosine_loss(user_repr, impressions, labels)
         return (
             loss1,
-            user_repr,
-            impressions,
-            labels,
-            samples_per_batch,
+            (user_repr * impressions).sum(dim=-1),
+            (labels + 1) / 2,
+            indexes,
             attn_scores,
             seq_len,
         )
@@ -243,9 +252,15 @@ if __name__ == "__main__":
     history = torch.randn(batch_size, 6, embed_dims)
     clicks = torch.randn(batch_size, 1, embed_dims)
     non_clicks = torch.randn(batch_size, 3, embed_dims)
-    loss, user_repr, impressions, labels, samples_per_batch, attn_score, seq_len = (
-        model(history, clicks, non_clicks)
-    )
+    (
+        loss,
+        preds,
+        target,
+        indexes,
+        attn_scores,
+        seq_len,
+    ) = model(history, clicks, non_clicks)
+
     preds += 1
     print(preds / 0.5, target)
     loss_fn = InfoNCE()

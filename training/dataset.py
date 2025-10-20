@@ -187,10 +187,13 @@ if __name__ == "__main__":
     loss = InfoNCE(temperature=0.003)
     for iter, (history, clicks, non_clicks) in enumerate(loader):
         print((clicks.sum(dim=2) != 0).sum(dim=-1))
-        loss, user_repr, impressions, labels, samples_per_batch, attn_score, seq_len = (
-            model(history, clicks, non_clicks)
-        )
-
+        (
+            loss,
+            preds,
+            target,
+            indexes,
+            attn_scores,
+            seq_len,
+        ) = model(history, clicks, non_clicks)
         # print(loss(relevance, target))
-
         break

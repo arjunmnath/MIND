@@ -7,7 +7,7 @@ trainer_config:
   batch_size: 64
   data_loader_workers: 4
   grad_norm_clip: 1.0
-  snapshot_path: snapshot.pt
+  snapshot_path: s3://dl-training-snapshots/snapshot.pt
   save_every: 3
   log_every: 100
   use_amp: true
@@ -15,7 +15,7 @@ trainer_config:
 
 optimizer_config:
   weight_decay: 0.01
-  learning_rate: 0.001 
+  learning_rate: 0.001
 
 mlflow:
   tracking_uri: databricks

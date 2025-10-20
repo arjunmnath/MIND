@@ -133,18 +133,15 @@ class Trainer:
         ):
             (
                 loss,
-                user_repr,
-                impressions,
-                labels,
-                samples_per_batch,
-                attn_score,
+                preds,
+                target,
+                indexes,
+                attn_scores,
                 seq_len,
             ) = self.model(history, clicks, non_clicks)
-            indexes, relevance, target = self._prepare_for_metrics(
-                user_repr, impressions, labels, samples_per_batch
-            )
+
             metrices = [
-                metric(relevance, target, indexes=indexes) for metric in self.metrices
+                metric(preds, target, indexes=indexes) for metric in self.metrices
             ]
         return metrices, loss.item()
 
@@ -161,19 +158,17 @@ class Trainer:
         ):
             (
                 loss,
-                user_repr,
-                impressions,
-                labels,
-                samples_per_batch,
-                attn_score,
+                preds,
+                target,
+                indexes,
+                attn_scores,
                 seq_len,
             ) = self.model(history, clicks, non_clicks)
-            indexes, relevance, target = self._prepare_for_metrics(
-                user_repr, impressions, labels, samples_per_batch
-            )
+
             metrices = [
-                metric(relevance, target, indexes=indexes) for metric in self.metrices
+                metric(preds, target, indexes=indexes) for metric in self.metrices
             ]
+
             self.optimizer.zero_grad()
             if self.config.use_amp:
                 self.scaler.scale(loss).backward()

@@ -50,13 +50,11 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
         dataset_dir=data_dir / "train",
         precompute=data_cfg.precompute,
         embed_dir=embed_dir / "train",
-        is_sanity_run=True,
     )
     test_dataset = Mind(
         dataset_dir=data_dir / "test",
         precompute=data_cfg.precompute,
         embed_dir=embed_dir / "test",
-        is_sanity_run=True,
     )
     loss_fn = InfoNCE()
     auc_roc = RetrievalAUROC()
@@ -76,23 +74,11 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
 
 @hydra.main(version_base=None, config_path=".", config_name="mind_train_cfg.yaml")
 def main(cfg: DictConfig):
-    # Use MPS device for training on Apple GPU
-    device = (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cpu")
-    )
-
     # configs
     opt_cfg = OptimizerConfig(**cfg["optimizer_config"])
     data_cfg = DataConfig(**cfg["data_config"])
     trainer_cfg = TrainingConfig(**cfg["trainer_config"])
     mlflow_cfg = MLFlowConfig(**cfg["mlflow"])
-
-    if torch.backends.mps.is_available():
-        print("Using MPS for training")
-    else:
-        print("MPS not available, falling back to CPU")
 
     model, optimizer, loss_fn, metrices, train_data, test_data = get_train_objs(
         data_cfg, opt_cfg
