@@ -17,7 +17,7 @@ def upload_to_s3(obj, dst):
     torch.save(obj, buffer)
     buffer.seek(0)
     dst = urlparse(dst, allow_fragments=False)
-    boto3.client("s3").upload_fileobj(buffer, dst.netloc, dst.path.lstrip("/"))
+    boto3.client("s3").upload_fileobj(buffer, "dl-training-snapshots", dst)
 
 
 def evaluate(dataloader, model, loss_fn, auc_roc, ndcg_5, ndcg_10, epoch, device):

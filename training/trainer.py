@@ -118,7 +118,6 @@ class Trainer:
         # save snapshot
         snapshot = asdict(snapshot)
         upload_to_s3(snapshot, self.config.snapshot_path)
-
         print(f"Snapshot saved at epoch {epoch}")
 
     def _test_batch(
@@ -208,35 +207,33 @@ class Trainer:
             )
             if train:
                 self.scheduler.step()
+            if iter % 100 == 0:
+                current_lr = self.optimizer.param_groups[0]["lr"]
+                print(
+                    f"[RANK {self.local_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
+                    f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
+                )
+                if self.local_rank == 0:
+                    if train:
+                        mlflow.log_metric("train_loss", batch_loss, step=iter)
+                        mlflow.log_metric("train_auc", metrices[0], step=iter)
 
-            # if iter % 100 == 0:
-            #     current_lr = self.optimizer.param_groups[0]["lr"]
-            #     print(
-            #         f"[RANK {self.local_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
-            #         f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
-            #     )
-            #     if self.local_rank == 0:
-            #         if train:
-            #             mlflow.log_metric("train_loss", batch_loss, step=iter)
-            #             mlflow.log_metric("train_auc", metrices[0], step=iter)
-            #
-            #             mlflow.log_metric("train_ndcg_5", metrices[1], step=iter)
-            #             mlflow.log_metric("train_ndcg_10", metrices[2], step=iter)
-            #             mlflow.log_metric("learning", current_lr, step=iter)
-            #         else:
-            #             mlflow.log_metric("eval_loss", batch_loss, step=iter)
-            #             mlflow.log_metric("eval_auc", metrices[0], step=iter)
-            #             mlflow.log_metric("eval_ndcg_5", metrices[1], step=iter)
-            #             mlflow.log_metric("eval_ndcg_10", metrices[2], step=iter)
-            #
+                        mlflow.log_metric("train_ndcg_5", metrices[1], step=iter)
+                        mlflow.log_metric("train_ndcg_10", metrices[2], step=iter)
+                        mlflow.log_metric("learning", current_lr, step=iter)
+                    else:
+                        mlflow.log_metric("eval_loss", batch_loss, step=iter)
+                        mlflow.log_metric("eval_auc", metrices[0], step=iter)
+                        mlflow.log_metric("eval_ndcg_5", metrices[1], step=iter)
+                        mlflow.log_metric("eval_ndcg_10", metrices[2], step=iter)
 
     def train(self):
         for epoch in range(self.epochs_run, self.config.max_epochs):
             epoch += 1
             self._run_epoch(epoch, self.train_loader, train=True)
-            # mlflow.pytorch.log_model(self.model, "model")
-            # if self.local_rank == 0 and epoch % self.save_every == 0:
-            #     self._save_snapshot(epoch)
+            mlflow.pytorch.log_model(self.model, "model")
+            if self.local_rank == 0 and epoch % self.save_every == 0:
+                self._save_snapshot(epoch)
             # eval run
             if self.test_loader:
                 self._run_epoch(epoch, self.test_loader, train=False)
