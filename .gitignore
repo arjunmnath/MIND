@@ -212,3 +212,5 @@ __marimo__/
 *.tsv
 *.onnx
 *.onnx.data
+
+mock.pth

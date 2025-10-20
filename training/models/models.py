@@ -134,25 +134,20 @@ class TwoTowerRecommendation(nn.Module):
         user_repr = F.normalize(
             user_repr.unsqueeze(1), p=2, dim=-1
         )  # dim: [batch_size, 1, 768]
-        labels_positive = torch.ones(batch_size, click_seq_len, device=user_repr.device)
-        lables_negative = torch.full(
-            (batch_size, non_click_seq_len), -1, device=user_repr.device
-        )
+        labels_positive = torch.ones(click_seq_len, device=user_repr.device)
+        lables_negative = torch.full((non_click_seq_len,), -1, device=user_repr.device)
         impressions = torch.cat(
             [
-                clicks[click_mask].view(1, -1, 768),
-                non_clicks[non_click_mask].view(1, -1, 768),
+                clicks[click_mask].view(-1, 768),
+                non_clicks[non_click_mask].view(-1, 768),
             ],
-            dim=1,
+            dim=0,
         )
-        labels = torch.cat([labels_positive, lables_negative], dim=1)
-        loss1 = self._cosine_loss(
-            user_repr.expand(-1, click_seq_len + non_click_seq_len, 768).reshape(
-                -1, 768
-            ),
-            impressions.reshape(-1, 768),
-            labels.flatten(),
+        labels = torch.cat([labels_positive, lables_negative], dim=0)
+        anchor = user_repr.squeeze(1).repeat_interleave(
+            click_mask.sum(dim=-1) + non_click_mask.sum(dim=-1), dim=0
         )
+        loss1 = self._cosine_loss(anchor, impressions, labels)
         # loss2 = self._infonce(user_repr, impressions, (labels + 1) / 2)
         return (loss1, user_repr, impressions, labels, attn_scores, seq_len)
 

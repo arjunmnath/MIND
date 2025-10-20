@@ -21,10 +21,23 @@ optimizer = optim.AdamW(model.parameters(), lr=0.001)
 # h[:, 5:, :] = 0
 # c[:, 1:, :] = 0
 # nc[:, 2:, :] = 0
-[h, c, nc] = [val.unsqueeze(0) for _, val in torch.load("mock.pth", weights_only=False)]
-print(h.shape, c.shape, nc.shape)
-dataset = TensorDataset(h, c, nc)
-loader = DataLoader(dataset)
+# dataset = TensorDataset(h, c, nc)
+# loader = DataLoader(dataset, batch_size=64)
+
+data_dir = Path("./dataset")
+embed_dir = Path("./model_binaries")
+train_dataset = Mind(
+    dataset_dir=data_dir / "train",
+    precompute=True,
+    embed_dir=embed_dir / "train",
+)
+test_dataset = Mind(
+    dataset_dir=data_dir / "test",
+    precompute=True,
+    embed_dir=embed_dir / "test",
+)
+
+loader = DataLoader(train_dataset, batch_size=64)
 num_epochs = 1000
 for epoch in range(num_epochs):
     model.train()
@@ -33,11 +46,11 @@ for epoch in range(num_epochs):
         loss, user_repr, impressions, labels, attn_scores, seq_len = model(
             history, clicks, non_clicks
         )
-        # print(user_repr @ impressions.mT, labels, seq_len)
-        loss.backward()
-        for name, param in model.named_parameters():
-            if param.grad is not None:
-                print(name, param.grad.abs().max())  # Check the max gradient
+        print(user_repr @ impressions.mT, labels, seq_len)
+        # loss.backward()
+        # for name, param in model.named_parameters():
+        #     if param.grad is not None:
+        #         print(name, param.grad.abs().max())  # Check the max gradient
         optimizer.step()
         if epoch == num_epochs - 1:
             plot_attention_scores(
