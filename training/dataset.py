@@ -1,3 +1,4 @@
+import logging
 from functools import partial
 from pathlib import Path
 from typing import List, Union
@@ -8,6 +9,8 @@ from models import TwoTowerRecommendation
 from torch.utils.data import DataLoader, Dataset
 from torchinfo import summary
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 tqdm.pandas()
 
@@ -59,7 +62,7 @@ class Mind(Dataset):
             assert embed_dir is not None, "embedding directory is required"
             embed_path = embed_dir / "embedding.pth"
             assert embed_path.exists(), "embeeding file does not exist"
-            self.embed = torch.load(embed_path.absolute().as_posix())
+            self.embed = torch.load(embed_path.absolute().as_posix(), weights_only=False)
         else:
             self.news = pd.read_csv(news_path.absolute().as_posix())
             self.news.set_index("news_id", inplace=True)
@@ -185,10 +188,8 @@ if __name__ == "__main__":
     model = TwoTowerRecommendation()
     ndcg = RetrievalNormalizedDCG()
     for iter, (history, clicks, non_clicks) in enumerate(loader):
-        print(
-            history.sum(dim=-1) != 0,
-            clicks.sum(dim=-1) != 0,
-            non_clicks.sum(dim=-1) != 0,
+        logger.debug(
+            f"History mask: {history.sum(dim=-1) != 0}, Clicks mask: {clicks.sum(dim=-1) != 0}, Non-clicks mask: {non_clicks.sum(dim=-1) != 0}"
         )
         # (
         #     loss,

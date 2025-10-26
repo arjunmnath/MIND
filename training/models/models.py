@@ -89,7 +89,7 @@ class CausalUserEncoder(nn.Module):
         else:
             # Find the length of each sequence by counting non-padded items (where mask is False)
             seq_lengths = (~padding_mask).sum(dim=1)
-            last_indices = seq_lengths - 1
+            last_indices = (seq_lengths - 1).clamp(min=0)
 
         # Use advanced indexing (gather) to pick the specific embeddings
         # Shape of last_indices needs to be broadcastable to the output shape
@@ -245,7 +245,7 @@ class TwoTowerRecommendation(nn.Module):
         repeated_neg_keys = torch.repeat_interleave(neg_keys, clicks_per_sample, dim=0)
         pos_keys_flattened = pos_keys[click_mask]
         result = torch.cat((pos_keys_flattened.unsqueeze(1), repeated_neg_keys), dim=1)
-        loss = self._loss(result, torch.zeros(result.size(0), dtype=torch.long))
+        loss = self._loss(result, torch.zeros(result.size(0), dtype=torch.long, device=user_repr.device))
         if not log:
             return loss
 

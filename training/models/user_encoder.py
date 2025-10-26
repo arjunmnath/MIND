@@ -1,9 +1,12 @@
+import logging
 import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+
+logger = logging.getLogger(__name__)
 
 
 class InfoNCELoss(nn.Module):
@@ -179,16 +182,16 @@ def example_usage():
     # Compute loss
     loss, metrics = criterion(user_emb, pos_article_emb, neg_article_emb)
 
-    print(f"Loss: {loss.item():.4f}")
-    print(f"Accuracy: {metrics['accuracy']:.4f}")
-    print(f"Margin (pos - neg): {metrics['margin']:.4f}")
+    logger.info(f"Loss: {loss.item():.4f}")
+    logger.info(f"Accuracy: {metrics['accuracy']:.4f}")
+    logger.info(f"Margin (pos - neg): {metrics['margin']:.4f}")
 
     # Backward pass
     loss.backward()
 
     # With only in-batch negatives (no sampled negatives)
     loss_in_batch_only, metrics = criterion(user_emb, pos_article_emb, neg_emb=None)
-    print(f"\nLoss (in-batch only): {loss_in_batch_only.item():.4f}")
+    logger.info(f"Loss (in-batch only): {loss_in_batch_only.item():.4f}")
 
     # With hard negative mining
     criterion_hnm = InfoNCEWithHardNegativeMining(
@@ -198,7 +201,7 @@ def example_usage():
     # Provide larger pool of negatives (e.g., 50), automatically selects hardest 5
     neg_pool = torch.randn(batch_size, 50, emb_dim)
     loss_hnm, metrics_hnm = criterion_hnm(user_emb, pos_article_emb, neg_pool)
-    print(f"\nLoss (with hard neg mining): {loss_hnm.item():.4f}")
+    logger.info(f"Loss (with hard neg mining): {loss_hnm.item():.4f}")
 
 
 if __name__ == "__main__":

@@ -25,3 +25,8 @@ def fetch_article(article_id):
         "region": row[5],
         "published_date": row[6],
     }
+
+
+sql = """
+
+"""

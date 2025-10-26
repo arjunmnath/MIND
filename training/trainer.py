@@ -1,3 +1,4 @@
+import logging
 import os
 from dataclasses import asdict
 from typing import List, Tuple
@@ -13,6 +14,8 @@ from torch.optim.lr_scheduler import LinearLR, SequentialLR
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from utils import upload_to_s3
+
+logger = logging.getLogger(__name__)
 
 
 class Trainer:
@@ -93,14 +96,14 @@ class Trainer:
             with snapshot as f:
                 snapshot_data = torch.load(f, map_location="cpu")
         except FileNotFoundError:
-            print("Snapshot not found. Training model from scratch")
+            logger.info("Snapshot not found. Training model from scratch")
             return
 
         snapshot = Snapshot(**snapshot_data)
         self.model.load_state_dict(snapshot.model_state)
         self.optimizer.load_state_dict(snapshot.optimizer_state)
         self.epochs_run = snapshot.finished_epoch
-        print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
+        logger.info(f"Resuming training from snapshot at Epoch {self.epochs_run}")
 
     def _save_snapshot(self, epoch):
         # capture snapshot
@@ -114,7 +117,7 @@ class Trainer:
         # save snapshot
         snapshot = asdict(snapshot)
         upload_to_s3(snapshot, self.config.snapshot_path)
-        print(f"Snapshot saved at epoch {epoch}")
+        logger.info(f"Snapshot saved at epoch {epoch}")
 
     def _test_batch(
         self,
@@ -135,7 +138,7 @@ class Trainer:
                 indexes,
                 attn_scores,
                 seq_len,
-            ) = self.model(history, clicks, non_clicks)
+            ) = self.model(history, clicks, non_clicks, log=log)
 
             metrices = [
                 metric(preds, target, indexes=indexes) for metric in self.metrices
@@ -161,7 +164,7 @@ class Trainer:
                 indexes,
                 attn_scores,
                 seq_len,
-            ) = self.model(history, clicks, non_clicks)
+            ) = self.model(history, clicks, non_clicks, log=log)
 
             metrices = [
                 metric(preds, target, indexes=indexes) for metric in self.metrices
@@ -202,7 +205,7 @@ class Trainer:
                 self.scheduler.step()
             if iter % 100 == 0:
                 current_lr = self.optimizer.param_groups[0]["lr"]
-                print(
+                logger.info(
                     f"[RANK {self.local_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
                     f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
                 )

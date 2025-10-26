@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from pathlib import Path
@@ -5,18 +6,19 @@ from pathlib import Path
 import hydra
 import mlflow
 import torch
+from config_classes import DataConfig, MLFlowConfig, OptimizerConfig, TrainingConfig
+from dataset import Mind
+from models import *
+from models.models import TwoTowerRecommendation
 from omegaconf import DictConfig
 from torch.distributed import destroy_process_group, init_process_group
 from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
-
-from config_classes import DataConfig, MLFlowConfig, OptimizerConfig, TrainingConfig
-from dataset import Mind
-from models import *
-from models.models import TwoTowerRecommendation
 from trainer import Trainer
 from utils import create_optimizer
+
+logger = logging.getLogger(__name__)
 
 
 def verify_min_gpu_count(min_gpus: int = 1) -> bool:
@@ -89,6 +91,11 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
 
 @hydra.main(version_base=None, config_path=".", config_name="mind_train_cfg.yaml")
 def main(cfg: DictConfig):
+    # Setup logging
+    from logging_config import setup_logging
+
+    setup_logging()
+
     device = ddp_setup()
 
     # configs
@@ -125,9 +132,9 @@ def main(cfg: DictConfig):
                 "optimizer": "AdamW",
             }
             mlflow.log_params(params)
-            click_padding = 35
-            history_padding = 558
-            non_click_padding = 297
+            click_padding = 32
+            history_padding = 512
+            non_click_padding = 256
 
             with open("model_summary.txt", "w") as f:
                 f.write(
@@ -146,7 +153,7 @@ def main(cfg: DictConfig):
             mlflow.log_artifact("model_summary.txt")
             trainer.train()
             model_info = mlflow.pytorch.log_model(model, name="model")
-            print(model_info)
+            logger.info(f"Model info: {model_info}")
     else:
         trainer.train()
     destroy_process_group()
@@ -155,7 +162,7 @@ def main(cfg: DictConfig):
 if __name__ == "__main__":
     _min_gpu_count = 1
     if not verify_min_gpu_count(min_gpus=_min_gpu_count):
-        print(
+        logger.error(
             f"Unable to locate sufficient {_min_gpu_count} gpus to run this example. Exiting."
         )
         sys.exit()

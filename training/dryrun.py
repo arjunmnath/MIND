@@ -1,3 +1,4 @@
+import logging
 from dataclasses import asdict
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
 from tqdm import tqdm
 from utils import plot_attention_scores, upload_to_s3
+
+logger = logging.getLogger(__name__)
 
 model = TwoTowerRecommendation()
 # model = model.to('mps')
@@ -51,6 +54,11 @@ crit = [
 ]
 
 
+# Setup logging
+from logging_config import setup_logging
+
+setup_logging()
+
 num_epochs = 1000
 for epoch in range(num_epochs):
     model.train()
@@ -69,7 +77,7 @@ for epoch in range(num_epochs):
         #     f"[Step {epoch}:{iter} | train Loss {loss:.5f} |"
         #     f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f}"
         # )
-        print(preds, target)
+        logger.debug(f"Predictions: {preds}, Targets: {target}")
         loss.backward()
         optimizer.step()
         if epoch == num_epochs - 1:
