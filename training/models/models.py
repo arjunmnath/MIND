@@ -3,30 +3,31 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class CausalUserEncoder(nn.Module):
+class AggregatingUserEncoder(nn.Module):
     """
-    Causal User Encoder for next-item prediction.
+    Aggregating User Encoder using Attention Pooling (batch_first).
 
-    This module processes a sequence of user's browsed news causally,
-    meaning the representation for each news item is generated only using
-    information from itself and previous items in the sequence.
+    This module processes a user's browsed news as a "bag of interests"
+    to generate a single, aggregated user embedding. It uses a special [CLS] token
+    and non-causal self-attention to summarize the entire history.
+    This version uses batch_first=True for more intuitive tensor handling.
     """
 
-    def __init__(self, news_embed_dim, max_seq_len=558, num_heads=16, dropout=0.3):
+    def __init__(self, news_embed_dim, max_seq_len=512, num_heads=16, dropout=0.3):
         super().__init__()
         assert (
             news_embed_dim % num_heads == 0
         ), f"news_embed_dim ({news_embed_dim}) must be divisible by num_heads ({num_heads})"
 
+        self.cls_token = nn.Parameter(torch.randn(1, 1, news_embed_dim))
+
         self.attention = nn.MultiheadAttention(
             embed_dim=news_embed_dim,
             num_heads=num_heads,
             dropout=dropout,
-            batch_first=False,
+            batch_first=True,  # The key change is here!
         )
-        self.position_encoding = nn.Embedding(max_seq_len, news_embed_dim)
-
-        # This projection is now applied to each item in the sequence
+        self.position_encoding = nn.Embedding(max_seq_len + 1, news_embed_dim)
         self.project = nn.Sequential(
             nn.Linear(news_embed_dim, news_embed_dim),
             nn.Dropout(dropout),
@@ -35,69 +36,46 @@ class CausalUserEncoder(nn.Module):
         )
 
     def forward(
-        self, news_embeds: torch.tensor, padding_mask: torch.tensor = None
-    ) -> torch.tensor:
+        self, news_embeds: torch.Tensor, padding_mask: torch.Tensor = None
+    ) -> torch.Tensor:
         """
         Args:
-            news_embeds: (batch_size, num_news, news_embed_dim) - embeddings of news browsed by users.
-            padding_mask: (batch_size, num_news) - Boolean mask where True indicates a padded item to be ignored.
+            news_embeds: (batch_size, num_news, news_embed_dim)
+            padding_mask: (batch_size, num_news) - True indicates a padded item.
 
         Returns:
-            user_sequence_repr: (batch_size, num_news, news_embed_dim) - sequence of user representations.
-                                The vector at index `t` can be used to predict the news item at `t+1`.
-            attention_weights: (batch_size, num_heads, num_news, num_news) - attention weights.
+            user_embedding: (batch_size, news_embed_dim)
+            attention_weights: (batch_size, num_heads, num_news+1, num_news+1)
         """
         batch_size, n_history, embed_dim = news_embeds.shape
         device = news_embeds.device
 
-        # 1. Add positional encodings
-        time_steps = torch.arange(n_history, device=device)
-        pos_encodings = self.position_encoding(time_steps).unsqueeze(
-            0
-        )  # (1, num_news, news_embed_dim)
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        news_embeds = torch.cat((cls_tokens, news_embeds), dim=1)
+
+        seq_len = n_history + 1
+
+        time_steps = torch.arange(seq_len, device=device)
+        pos_encodings = self.position_encoding(time_steps).unsqueeze(0)
         news_embeds = news_embeds + pos_encodings
 
-        # 2. Prepare masks for attention
-        # Causal mask to prevent attending to future tokens
-        causal_mask = torch.triu(
-            torch.ones(n_history, n_history, device=device), diagonal=1
-        ).bool()
-
-        # Transpose for MultiheadAttention which expects (seq_len, batch_size, embed_dim)
-        news_embeds = news_embeds.transpose(0, 1)
-
-        # 3. Apply causal self-attention
-        # attn_output shape: (num_news, batch_size, news_embed_dim)
+        if padding_mask is not None:
+            cls_padding_mask = torch.zeros(
+                batch_size, 1, dtype=torch.bool, device=device
+            )
+            padding_mask = torch.cat((cls_padding_mask, padding_mask), dim=1)
         attn_output, attn_weights = self.attention(
             query=news_embeds,
             key=news_embeds,
             value=news_embeds,
-            attn_mask=causal_mask,
-            key_padding_mask=padding_mask,  # Mask for padded elements
+            key_padding_mask=padding_mask,
             need_weights=True,
-            average_attn_weights=False,  # We want weights per head
+            average_attn_weights=False,
         )
-
-        # 4. Apply the final projection to each item in the sequence
         projected_output = self.project(attn_output)
-
-        # Transpose back to (batch_size, num_news, news_embed_dim)
-        user_sequence_repr = projected_output.transpose(0, 1)
-        if padding_mask is None:
-            # If no mask, all sequences have the same length
-            last_indices = torch.tensor([n_history - 1] * batch_size, device=device)
-        else:
-            # Find the length of each sequence by counting non-padded items (where mask is False)
-            seq_lengths = (~padding_mask).sum(dim=1)
-            last_indices = (seq_lengths - 1).clamp(min=0)
-
-        # Use advanced indexing (gather) to pick the specific embeddings
-        # Shape of last_indices needs to be broadcastable to the output shape
-        idx = last_indices.view(-1, 1, 1).expand(-1, 1, embed_dim)
-        user_embedding = user_sequence_repr.gather(dim=1, index=idx).squeeze(1)
-
-        # 6. Normalize the final embedding (important for cosine similarity searches)
+        user_embedding = projected_output[:, 0, :]
         user_embedding = F.normalize(user_embedding, p=2, dim=-1)
+
         return user_embedding, attn_weights
 
 
@@ -209,7 +187,7 @@ class NewsEncoder(nn.Module):
 class TwoTowerRecommendation(nn.Module):
     def __init__(self):
         super(TwoTowerRecommendation, self).__init__()
-        self.user_tower = CausalUserEncoder(768)
+        self.user_tower = AggregatingUserEncoder(768)
         self.news_tower = NewsEncoder()
         self._loss = nn.CrossEntropyLoss()
 
@@ -245,7 +223,10 @@ class TwoTowerRecommendation(nn.Module):
         repeated_neg_keys = torch.repeat_interleave(neg_keys, clicks_per_sample, dim=0)
         pos_keys_flattened = pos_keys[click_mask]
         result = torch.cat((pos_keys_flattened.unsqueeze(1), repeated_neg_keys), dim=1)
-        loss = self._loss(result, torch.zeros(result.size(0), dtype=torch.long, device=user_repr.device))
+        loss = self._loss(
+            result,
+            torch.zeros(result.size(0), dtype=torch.long, device=user_repr.device),
+        )
         if not log:
             return loss
 

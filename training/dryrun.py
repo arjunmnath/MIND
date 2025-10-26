@@ -5,12 +5,13 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from config_classes import Snapshot
-from dataset import Mind
-from models import *
 from torch.utils.data import DataLoader, TensorDataset
 from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
 from tqdm import tqdm
+
+from config_classes import Snapshot
+from dataset import Mind
+from models import *
 from utils import plot_attention_scores, upload_to_s3
 
 logger = logging.getLogger(__name__)
@@ -20,9 +21,9 @@ model = TwoTowerRecommendation()
 batch_size = 2
 optimizer = optim.AdamW(model.parameters(), lr=0.01)
 
-h = torch.randn(batch_size, 558, 768)
-c = torch.randn(batch_size, 35, 768)
-nc = torch.randn(batch_size, 297, 768)
+h = torch.randn(batch_size, 512, 768)
+c = torch.randn(batch_size, 32, 768)
+nc = torch.randn(batch_size, 256, 768)
 h[0, 5:, :] = 0
 c[0, 1:, :] = 0
 nc[0, 1:, :] = 0
