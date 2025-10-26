@@ -4,11 +4,10 @@ from typing import List, Union
 
 import pandas as pd
 import torch
+from models import TwoTowerRecommendation
 from torch.utils.data import DataLoader, Dataset
 from torchinfo import summary
 from tqdm import tqdm
-
-from models import TwoTowerRecommendation
 
 tqdm.pandas()
 
@@ -52,9 +51,9 @@ class Mind(Dataset):
         ), "behaviour_path or news_path does not exist"
         self.df = pd.read_csv(behaviour_path.absolute().as_posix())
         self.precompute = precompute
-        self.click_padding = 35
-        self.history_padding = 558
-        self.non_click_padding = 297
+        self.click_padding = 32
+        self.history_padding = 512
+        self.non_click_padding = 256
         self.is_sanity_run = is_sanity_run
         if precompute:
             assert embed_dir is not None, "embedding directory is required"
@@ -164,6 +163,8 @@ class Mind(Dataset):
         try:
             i = 0
             for article_id in id_list:
+                if i >= padding_size:
+                    break
                 if article_id in self.embed:
                     padded_tensor[i] = self.embed[article_id]
                     i += 1
@@ -184,13 +185,17 @@ if __name__ == "__main__":
     model = TwoTowerRecommendation()
     ndcg = RetrievalNormalizedDCG()
     for iter, (history, clicks, non_clicks) in enumerate(loader):
-        print((clicks.sum(dim=2) != 0).sum(dim=-1))
-        (
-            loss,
-            preds,
-            target,
-            indexes,
-            attn_scores,
-            seq_len,
-        ) = model(history, clicks, non_clicks)
+        print(
+            history.sum(dim=-1) != 0,
+            clicks.sum(dim=-1) != 0,
+            non_clicks.sum(dim=-1) != 0,
+        )
+        # (
+        #     loss,
+        #     preds,
+        #     target,
+        #     indexes,
+        #     attn_scores,
+        #     seq_len,
+        # ) = model(history, clicks, non_clicks)
         break

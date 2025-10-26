@@ -4,19 +4,18 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
-from tqdm import tqdm
-
 from config_classes import Snapshot
 from dataset import Mind
 from models import *
+from torch.utils.data import DataLoader, TensorDataset
+from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
+from tqdm import tqdm
 from utils import plot_attention_scores, upload_to_s3
 
 model = TwoTowerRecommendation()
 # model = model.to('mps')
 batch_size = 2
-optimizer = optim.AdamW(model.parameters(), lr=0.001)
+optimizer = optim.AdamW(model.parameters(), lr=0.01)
 
 h = torch.randn(batch_size, 558, 768)
 c = torch.randn(batch_size, 35, 768)
@@ -44,7 +43,7 @@ loader = DataLoader(dataset, batch_size=64)
 #     embed_dir=embed_dir / "test",
 # )
 # loader = DataLoader(train_dataset, batch_size=batch_size)
-
+#
 crit = [
     RetrievalAUROC(),
     RetrievalNormalizedDCG(top_k=5),
@@ -64,12 +63,13 @@ for epoch in range(num_epochs):
             indexes,
             attn_scores,
             seq_len,
-        ) = model(history, clicks, non_clicks)
+        ) = model(history, clicks, non_clicks, log=True)
         metrices = [metric(preds, target, indexes=indexes) for metric in crit]
-        print(
-            f"[Step {epoch}:{iter} | train Loss {loss:.5f} |"
-            f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f}"
-        )
+        # print(
+        #     f"[Step {epoch}:{iter} | train Loss {loss:.5f} |"
+        #     f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f}"
+        # )
+        print(preds, target)
         loss.backward()
         optimizer.step()
         if epoch == num_epochs - 1:

@@ -6,210 +6,238 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 
-def attention(query, key, value, mask=None, dropout=None):
-    "Compute 'Scaled Dot Product Attention'"
-    d_k = query.size(-1)
-    scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
-    scores = scores.cpu()
-    if mask is not None:
-        scores = scores.masked_fill(Variable(mask) == 0, -1e9).cuda()
-
-    p_attn = F.softmax(scores, dim=-1)
-    if dropout is not None:
-        p_attn = dropout(p_attn)
-
-    return torch.matmul(p_attn, value), p_attn
-
-
-class MultiHeadedAttention(nn.Module):
-    def __init__(self, h, d_model, dropout=0.1):
-        "Take in model size and number of heads."
-        super(MultiHeadedAttention, self).__init__()
-
-        self.d_k = d_model // h
-        self.h = h
-        self.attn = None
-        self.dropout = nn.Dropout(p=dropout)
-
-    def forward(self, query, key, value, mask=None):
-        if mask is not None:
-            mask = mask.unsqueeze(1)
-        nbatches = query.size(0)
-
-        query, key, value = [
-            x.view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
-            for x in (query, key, value)
-        ]
-
-        x, self.attn = attention(query, key, value, mask=mask, dropout=self.dropout)
-        x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
-        return x
-
-
-class NewsLevelMultiHeadSelfAttention(nn.Module):
+class InfoNCELoss(nn.Module):
     """
-    Multi-head self-attention for news articles.
-    Computes attention between news items browsed by the same user.
-    The embedding dimension is split across heads.
+    InfoNCE Loss for two-tower recommendation systems.
+    Supports in-batch negatives + sampled hard negatives.
     """
 
-    def __init__(self, input_dim, num_heads):
-        super().__init__()
-        assert input_dim % num_heads == 0, "input_dim must be divisible by num_heads"
-
-        self.num_heads = num_heads
-        self.input_dim = input_dim
-        self.head_dim = input_dim // num_heads  # d_k in your description
-
-        # Single linear layers that project to all heads at once
-        self.W_Q = nn.Linear(input_dim, input_dim, bias=False)
-        self.W_V = nn.Linear(input_dim, input_dim, bias=False)
-
-    def forward(self, news_embeds):
+    def __init__(self, temperature=0.07):
         """
         Args:
-            news_embeds: (batch_size, num_news, input_dim) - news representations
+            temperature: Scaling factor for logits (lower = sharper distributions)
+            use_in_batch_negatives: Whether to use other samples' positives as negatives
+        """
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, user_emb, pos_emb, neg_emb):
+        """
+        Args:
+            user_emb: (batch_size, n_positive, emb_dim) - user tower output
+            pos_emb: (batch_size, n_positive, emb_dim) - positive article embeddings
+            neg_emb: (batch_size, num_neg, emb_dim) - sampled negative embeddings (optional)
 
         Returns:
-            multi_head_repr: (batch_size, num_news, input_dim)
+            loss: scalar tensor
+            metrics: dict with accuracy and margin stats
         """
-        batch_size, M, dim = news_embeds.shape
+        batch_size = user_emb.shape[0]
+        user_emb = F.normalize(user_emb, dim=-1)  # (batch_size, 768)
+        pos_emb = F.normalize(pos_emb, dim=-1)  # (batch_size, N, 768)
+        neg_emb = F.normalize(neg_emb, dim=-1)  # (batch_size, N, 768)
+        pos_scores = torch.sum(user_emb * pos_emb, dim=-1) / self.temperature
 
-        # Step 1: Linear transformations to get Q and V for all heads
-        # Q, V shape: (batch_size, num_news, input_dim)
-        Q = self.W_Q(news_embeds)
-        V = self.W_V(news_embeds)
-
-        # Step 2: Reshape to split into heads
-        # (batch, M, input_dim) -> (batch, M, num_heads, head_dim) -> (batch, num_heads, M, head_dim)
-        Q = Q.view(batch_size, M, self.num_heads, self.head_dim).transpose(1, 2)
-        V = V.view(batch_size, M, self.num_heads, self.head_dim).transpose(1, 2)
-
-        # Also reshape original embeddings for attention computation
-        news_embeds_heads = news_embeds.view(
-            batch_size, M, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        # Shape: (batch, num_heads, M, head_dim)
-
-        # Step 3: Compute attention for each head
-        # Attention scores: Q @ news_embeds^T
-        # (batch, num_heads, M, head_dim) @ (batch, num_heads, head_dim, M)
-        # -> (batch, num_heads, M, M)
-        scores = torch.matmul(Q, news_embeds_heads.transpose(-2, -1))
-
-        # Apply softmax to get attention weights β^k_{i,j}
-        attention_weights = F.softmax(scores, dim=-1)  # (batch, num_heads, M, M)
-
-        # Step 4: Apply attention weights to get weighted news
-        # (batch, num_heads, M, M) @ (batch, num_heads, M, head_dim)
-        # -> (batch, num_heads, M, head_dim)
-        weighted_news = torch.matmul(attention_weights, news_embeds_heads)
-
-        # Step 5: Apply V transformation
-        # (batch, num_heads, M, head_dim) @ (batch, num_heads, M, head_dim)
-        # We need to apply V to weighted_news
-        # Actually V transformation is already applied, so we use V matrix
-        head_outputs = torch.matmul(
-            attention_weights, V
-        )  # (batch, num_heads, M, head_dim)
-
-        # Step 6: Concatenate heads back together
-        # (batch, num_heads, M, head_dim) -> (batch, M, num_heads, head_dim) -> (batch, M, input_dim)
-        multi_head_repr = (
-            head_outputs.transpose(1, 2).contiguous().view(batch_size, M, dim)
+        logits = pos_scores.unsqueeze(1)  # (batch_size, 1)
+        neg_scores = (
+            torch.sum(user_emb.unsqueeze(1) * neg_emb, dim=-1) / self.temperature
         )
 
-        return multi_head_repr
+        logits = torch.cat([logits, neg_scores], dim=1)
+
+        # InfoNCE loss: positive should rank first
+        labels = torch.zeros(batch_size, dtype=torch.long, device=user_emb.device)
+        loss = F.cross_entropy(logits, labels)
+
+        # Compute metrics for monitoring
+        with torch.no_grad():
+            # Accuracy: % of samples where positive scores highest
+            predictions = torch.argmax(logits, dim=1)
+            accuracy = (predictions == 0).float().mean()
+
+            # Average positive score
+            avg_pos_score = pos_scores.mean()
+
+            # Average negative score (if negatives exist)
+            if logits.shape[1] > 1:
+                neg_logits = logits[:, 1:]  # all negatives
+                avg_neg_score = neg_logits.max(dim=1)[
+                    0
+                ].mean()  # hardest negative per sample
+                margin = avg_pos_score - avg_neg_score
+            else:
+                avg_neg_score = torch.tensor(0.0)
+                margin = torch.tensor(0.0)
+
+            metrics = {
+                "accuracy": accuracy.item(),
+                "avg_pos_score": avg_pos_score.item(),
+                "avg_neg_score": avg_neg_score.item(),
+                "margin": margin.item(),
+            }
+
+        return loss, metrics
 
 
-class AdditiveNewsAttention(nn.Module):
+class InfoNCEWithHardNegativeMining(nn.Module):
     """
-    Additive attention mechanism to select important news for user representation.
+    InfoNCE with online hard negative mining.
+    Selects hardest K negatives from a larger pool.
     """
 
-    def __init__(self, news_dim):
+    def __init__(
+        self, temperature=0.07, use_in_batch_negatives=True, top_k_hard_negatives=5
+    ):
         super().__init__()
-        self.V_n = nn.Linear(news_dim, news_dim)
-        self.v_n = nn.Parameter(torch.zeros(news_dim))
-        self.q_n = nn.Parameter(torch.zeros(news_dim))
+        self.temperature = temperature
+        self.use_in_batch_negatives = use_in_batch_negatives
+        self.top_k = top_k_hard_negatives
 
-        # Initialize parameters properly
-        nn.init.xavier_uniform_(self.V_n.weight)
-        nn.init.zeros_(self.V_n.bias)
-        nn.init.normal_(self.v_n, mean=0.0, std=0.02)
-        nn.init.normal_(self.q_n, mean=0.0, std=0.02)
-
-    def forward(self, news_repr):
+    def forward(self, user_emb, pos_emb, neg_emb_pool):
         """
         Args:
-            news_repr: (batch_size, num_news, news_dim) - multi-head news representations
+            user_emb: (batch_size, emb_dim)
+            pos_emb: (batch_size, emb_dim)
+            neg_emb_pool: (batch_size, pool_size, emb_dim) - larger pool of negatives
 
-        Returns:
-            user_repr: (batch_size, news_dim) - final user representation
-            attention_weights: (batch_size, num_news) - attention weights for interpretability
+        Selects top_k hardest negatives from the pool based on similarity.
         """
-        # Equation (8): a^n_i = q_n^T tanh(V_n × h^n_i + v_n)
-        transformed = self.V_n(news_repr)  # (batch, N, news_dim)
+        batch_size = user_emb.shape[0]
 
-        # Add v_n (broadcast across batch and news dimensions)
-        v_n_expanded = self.v_n.unsqueeze(0).unsqueeze(0)  # (1, 1, news_dim)
-        combined = torch.tanh(transformed + v_n_expanded)  # (batch, N, news_dim)
+        # Normalize
+        user_emb = F.normalize(user_emb, dim=-1)
+        pos_emb = F.normalize(pos_emb, dim=-1)
+        neg_emb_pool = F.normalize(neg_emb_pool, dim=-1)
 
-        # Multiply by q_n and sum across the last dimension
-        q_n_expanded = self.q_n.unsqueeze(0).unsqueeze(0)  # (1, 1, news_dim)
-        attention_scores = (combined * q_n_expanded).sum(dim=-1)  # (batch, N)
+        # Compute similarities with all negatives in pool
+        # (batch_size, pool_size)
+        neg_similarities = torch.sum(user_emb.unsqueeze(1) * neg_emb_pool, dim=-1)
 
-        # Equation (9): α^n_i = exp(a^n_i) / Σ_j exp(a^n_j)
-        attention_weights = F.softmax(attention_scores, dim=1)  # (batch, N)
+        # Select top-k hardest negatives (highest similarity = hardest)
+        _, top_k_indices = torch.topk(neg_similarities, k=self.top_k, dim=1)
 
-        # Equation (10): u = Σ_i α^n_i h^n_i
-        user_repr = torch.bmm(
-            attention_weights.unsqueeze(1),  # (batch, 1, N)
-            news_repr,  # (batch, N, news_dim)
-        ).squeeze(
-            1
-        )  # (batch, news_dim)
+        # Gather hard negatives (batch_size, top_k, emb_dim)
+        batch_indices = torch.arange(batch_size, device=user_emb.device).unsqueeze(1)
+        hard_neg_emb = neg_emb_pool[batch_indices, top_k_indices]
 
-        return user_repr, attention_weights
+        # Now use standard InfoNCE with selected hard negatives
+        pos_scores = torch.sum(user_emb * pos_emb, dim=-1) / self.temperature
+        logits = pos_scores.unsqueeze(1)
 
+        if self.use_in_batch_negatives:
+            in_batch_scores = torch.matmul(user_emb, pos_emb.T) / self.temperature
+            mask = torch.eye(batch_size, device=user_emb.device).bool()
+            in_batch_scores = in_batch_scores.masked_fill(mask, float("-inf"))
+            logits = torch.cat([logits, in_batch_scores], dim=1)
 
-class UserEncoder(nn.Module):
-    """
-    Paper: https://wuch15.github.io/paper/EMNLP2019-NRMS.pdf
-    Complete User Encoder module combining multi-head self-attention and additive attention.
-    The embedding dimension is split across attention heads as per standard transformer architecture.
-    """
-
-    def __init__(self, news_embed_dim, num_heads=16):
-        super().__init__()
-
-        assert (
-            news_embed_dim % num_heads == 0
-        ), f"news_embed_dim ({news_embed_dim}) must be divisible by num_heads ({num_heads})"
-
-        # Layer 1: News-level multi-head self-attention
-        self.news_self_attention = NewsLevelMultiHeadSelfAttention(
-            input_dim=news_embed_dim, num_heads=num_heads
+        # Add hard negatives
+        hard_neg_scores = (
+            torch.sum(user_emb.unsqueeze(1) * hard_neg_emb, dim=-1) / self.temperature
         )
+        logits = torch.cat([logits, hard_neg_scores], dim=1)
 
-        # Layer 2: Additive news attention
-        # Note: output dimension stays the same (not multiplied by num_heads)
-        self.additive_attention = AdditiveNewsAttention(news_embed_dim)
+        labels = torch.zeros(batch_size, dtype=torch.long, device=user_emb.device)
+        loss = F.cross_entropy(logits, labels)
 
-    def forward(self, news_embeds):
-        """
-        Args:
-            news_embeds: (batch_size, num_news, news_embed_dim)
-                        - embeddings of news browsed by users
+        # Metrics
+        with torch.no_grad():
+            accuracy = (torch.argmax(logits, dim=1) == 0).float().mean()
+            metrics = {
+                "accuracy": accuracy.item(),
+                "avg_pos_score": pos_scores.mean().item(),
+                "avg_hard_neg_score": hard_neg_scores.max(dim=1)[0].mean().item(),
+            }
 
-        Returns:
-            user_repr: (batch_size, news_embed_dim) - user representation
-            attention_weights: (batch_size, num_news) - news importance weights
-        """
-        # Apply multi-head self-attention on news
-        news_multi_head_repr = self.news_self_attention(news_embeds)
+        return loss, metrics
 
-        # Apply additive attention to get user representation
-        user_repr, attention_weights = self.additive_attention(news_multi_head_repr)
 
-        return user_repr, attention_weights
+# ============================================================================
+# Usage Example
+# ============================================================================
+
+
+def example_usage():
+    """Example of how to use InfoNCE loss in training loop"""
+
+    # Hyperparameters
+    batch_size = 256
+    emb_dim = 128
+    num_sampled_negatives = 10
+
+    # Initialize loss
+    criterion = InfoNCELoss(
+        temperature=0.07, use_in_batch_negatives=True  # Recommended!
+    )
+
+    # Dummy data (replace with your actual model outputs)
+    user_emb = torch.randn(batch_size, emb_dim)  # From user tower
+    pos_article_emb = torch.randn(batch_size, emb_dim)  # From article tower (positives)
+    neg_article_emb = torch.randn(
+        batch_size, num_sampled_negatives, emb_dim
+    )  # Sampled negatives
+
+    # Compute loss
+    loss, metrics = criterion(user_emb, pos_article_emb, neg_article_emb)
+
+    print(f"Loss: {loss.item():.4f}")
+    print(f"Accuracy: {metrics['accuracy']:.4f}")
+    print(f"Margin (pos - neg): {metrics['margin']:.4f}")
+
+    # Backward pass
+    loss.backward()
+
+    # With only in-batch negatives (no sampled negatives)
+    loss_in_batch_only, metrics = criterion(user_emb, pos_article_emb, neg_emb=None)
+    print(f"\nLoss (in-batch only): {loss_in_batch_only.item():.4f}")
+
+    # With hard negative mining
+    criterion_hnm = InfoNCEWithHardNegativeMining(
+        temperature=0.07, use_in_batch_negatives=True, top_k_hard_negatives=5
+    )
+
+    # Provide larger pool of negatives (e.g., 50), automatically selects hardest 5
+    neg_pool = torch.randn(batch_size, 50, emb_dim)
+    loss_hnm, metrics_hnm = criterion_hnm(user_emb, pos_article_emb, neg_pool)
+    print(f"\nLoss (with hard neg mining): {loss_hnm.item():.4f}")
+
+
+if __name__ == "__main__":
+    example_usage()
+
+
+# ============================================================================
+# Training Tips
+# ============================================================================
+"""
+RECOMMENDATIONS:
+
+1. Temperature tuning:
+   - Start with 0.07 (common default)
+   - Lower (0.01-0.05) = sharper, more aggressive
+   - Higher (0.1-0.3) = softer, more forgiving
+   - If training is unstable, increase temperature
+
+2. Batch size:
+   - Larger is better for in-batch negatives (256-512 recommended)
+   - With batch_size=256, you get 255 free negatives per sample!
+
+3. Negative sampling strategy:
+   - In-batch negatives: Always use (free & hard)
+   - Sampled negatives: 5-10 per sample
+   - Mix: 50% random, 30% popularity-biased, 20% hard (similar embeddings)
+
+4. Learning rate:
+   - Start lower than with CosineEmbeddingLoss (1e-4 to 5e-4)
+   - InfoNCE gradients can be larger
+   - Use warmup (1000-2000 steps)
+
+5. Monitoring:
+   - Watch 'accuracy' metric: should approach 0.9+ as training progresses
+   - Watch 'margin': should increase (positives getting higher scores than negatives)
+   - If accuracy stays low (<0.5), decrease temperature or check data quality
+
+6. Comparing to your current setup:
+   - InfoNCE should give MORE stable gradients
+   - Metrics should be less noisy
+   - Training should converge faster
+"""

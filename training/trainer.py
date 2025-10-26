@@ -6,13 +6,12 @@ import fsspec
 import mlflow
 import torch
 import torch.distributed as dist
+from config_classes import Snapshot, TrainingConfig
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LinearLR, SequentialLR
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
-
-from config_classes import Snapshot, TrainingConfig
 from utils import upload_to_s3
 
 
@@ -122,6 +121,7 @@ class Trainer:
         history: torch.Tensor,
         clicks: torch.Tensor,
         non_clicks: torch.Tensor,
+        log: bool,
     ) -> Tuple[List[float], float]:
         with torch.set_grad_enabled(False), torch.amp.autocast(
             device_type=self.device_type,
@@ -147,6 +147,7 @@ class Trainer:
         history: torch.Tensor,
         clicks: torch.Tensor,
         non_clicks: torch.Tensor,
+        log: bool,
     ) -> Tuple[List[float], float]:
         with torch.set_grad_enabled(True), torch.amp.autocast(
             device_type=self.device_type,
@@ -193,9 +194,9 @@ class Trainer:
             non_clicks = non_clicks.to(self.local_rank)
             torch.cuda.empty_cache()
             metrices, batch_loss = (
-                self._train_batch(history, clicks, non_clicks)
+                self._train_batch(history, clicks, non_clicks, iter % 100 == 0)
                 if train
-                else self._test_batch(history, clicks, non_clicks)
+                else self._test_batch(history, clicks, non_clicks, iter % 100 == 0)
             )
             if train:
                 self.scheduler.step()
