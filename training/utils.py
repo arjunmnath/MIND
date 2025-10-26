@@ -4,7 +4,6 @@ from urllib.parse import urlparse
 
 import boto3
 import matplotlib.pyplot as plt
-import mlflow
 import numpy as np
 import seaborn as sns
 import torch
@@ -45,7 +44,7 @@ def create_optimizer(model: torch.nn.Module, opt_config: OptimizerConfig):
             elif pn.endswith("weight") and isinstance(m, whitelist_weight_modules):
                 # weights of whitelist modules will be weight decayed
                 decay.add(fpn)
-            elif pn.endswith("in_proj_weight") or pn.endswith("temporal_decay"):
+            elif pn.endswith("in_proj_weight") or pn.endswith("cls_token"):
                 # MHA projection layer
                 decay.add(fpn)
             elif pn.endswith("weight") and isinstance(m, blacklist_weight_modules):
@@ -84,6 +83,7 @@ def create_optimizer(model: torch.nn.Module, opt_config: OptimizerConfig):
     optimizer = torch.optim.AdamW(
         optim_groups, lr=opt_config.learning_rate, betas=(0.9, 0.95)
     )
+
     return optimizer
 
 

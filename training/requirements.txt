@@ -8,4 +8,4 @@ torchmetrics
 torchinfo
 boto3
 hydra-core
-mlflow[databricks]>=3.1
+wandb

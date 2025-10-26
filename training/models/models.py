@@ -228,7 +228,7 @@ class TwoTowerRecommendation(nn.Module):
             torch.zeros(result.size(0), dtype=torch.long, device=user_repr.device),
         )
         if not log:
-            return loss
+            return loss, None, None, None, None, None
 
         labels_positive = torch.ones(click_seq_len, device=user_repr.device)
         lables_negative = torch.full((non_click_seq_len,), -1, device=user_repr.device)

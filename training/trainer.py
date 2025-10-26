@@ -4,15 +4,15 @@ from dataclasses import asdict
 from typing import List, Tuple
 
 import fsspec
-import mlflow
 import torch
 import torch.distributed as dist
-from config_classes import Snapshot, TrainingConfig
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LinearLR, SequentialLR
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
+
+from config_classes import Snapshot, TrainingConfig
 from utils import upload_to_s3
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ class Trainer:
         self.model.load_state_dict(snapshot.model_state)
         self.optimizer.load_state_dict(snapshot.optimizer_state)
         self.epochs_run = snapshot.finished_epoch
-        logger.info(f"Resuming training from snapshot at Epoch {self.epochs_run}")
+        logger.info(f"Resumig training from snapshot at Epoch {self.epochs_run}")
 
     def _save_snapshot(self, epoch):
         # capture snapshot
@@ -138,8 +138,7 @@ class Trainer:
                 indexes,
                 attn_scores,
                 seq_len,
-            ) = self.model(history, clicks, non_clicks, log=log)
-
+            ) = self.model(history, clicks, non_clicks, log=True)
             metrices = [
                 metric(preds, target, indexes=indexes) for metric in self.metrices
             ]
@@ -166,9 +165,11 @@ class Trainer:
                 seq_len,
             ) = self.model(history, clicks, non_clicks, log=log)
 
-            metrices = [
-                metric(preds, target, indexes=indexes) for metric in self.metrices
-            ]
+            metrices = (
+                [metric(preds, target, indexes=indexes) for metric in self.metrices]
+                if log
+                else []
+            )
 
             self.optimizer.zero_grad()
             if self.config.use_amp:
@@ -187,7 +188,7 @@ class Trainer:
                 self.optimizer.step()
             return metrices, loss.item()
 
-    def _run_epoch(self, epoch: int, dataloader: DataLoader, train: bool = True):
+    def _run_epoch(self, epoch: int, dataloader: DataLoader, run, train: bool = True):
         if train and self.device_type == "cuda":
             dataloader.sampler.set_epoch(epoch)
         for iter, (history, clicks, non_clicks) in enumerate(dataloader):
@@ -209,37 +210,36 @@ class Trainer:
                     f"[RANK {self.local_rank}] Step{epoch}:{iter} | {step_type} Loss {batch_loss:.5f} |"
                     f" auc: {metrices[0]:.5f} | ndcg@5: {metrices[1]:.4f} | ndcg@10: {metrices[2]:.4f} | lr: {current_lr:.6f}"
                 )
-                if self.local_rank == 0:
+                if self.local_rank == 0 and run is not None:
                     if train:
-                        mlflow.log_metric("train_loss", batch_loss, step=iter)
-                        mlflow.log_metric("train_auc", metrices[0], step=iter)
-
-                        mlflow.log_metric("train_ndcg_5", metrices[1], step=iter)
-                        mlflow.log_metric("train_ndcg_10", metrices[2], step=iter)
-                        mlflow.log_metric("learning", current_lr, step=iter)
+                        run.log(
+                            {
+                                "train_loss": batch_loss,
+                                "train_auc": metrices[0],
+                                "train_ndcg_5": metrices[1],
+                                "train_ndcg_10": metrices[2],
+                                "learning": current_lr,
+                            }
+                        )
                     else:
-                        mlflow.log_metric("eval_loss", batch_loss, step=iter)
-                        mlflow.log_metric("eval_auc", metrices[0], step=iter)
-                        mlflow.log_metric("eval_ndcg_5", metrices[1], step=iter)
-                        mlflow.log_metric("eval_ndcg_10", metrices[2], step=iter)
+                        run.log(
+                            {
+                                "eval_loss": batch_loss,
+                                "eval_auc": metrices[0],
+                                "eval_ndcg_5": metrices[1],
+                                "eval_ndcg_10": metrices[2],
+                            }
+                        )
 
-    def train(self):
+    def train(self, run=None):
         for epoch in range(self.epochs_run, self.config.max_epochs):
             epoch += 1
-            self._run_epoch(epoch, self.train_loader, train=True)
-            mlflow.pytorch.log_model(
-                self.model,
-                f"cars-two-tower-e{epoch}",
-                input_example=(
-                    torch.randn(1, 558, 768),
-                    torch.randn((1, 35, 768), torch.randn(1, 297, 768)),
-                ),
-            )
+            self._run_epoch(epoch, self.train_loader, run, train=True)
             if self.local_rank == 0 and epoch % self.save_every == 0:
                 self._save_snapshot(epoch)
             # eval run
             if self.test_loader:
-                self._run_epoch(epoch, self.test_loader, train=False)
+                self._run_epoch(epoch, self.test_loader, run, train=False)
 
     def init_weights(self, m):
         if isinstance(m, torch.nn.Linear):

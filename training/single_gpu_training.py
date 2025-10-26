@@ -3,14 +3,13 @@ import sys
 from pathlib import Path
 
 import hydra
-import mlflow
 import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
 
-from config_classes import DataConfig, MLFlowConfig, OptimizerConfig, TrainingConfig
+from config_classes import DataConfig, OptimizerConfig, TrainingConfig
 from dataset import Mind
 from models import *
 from models.models import TwoTowerRecommendation
@@ -76,9 +75,8 @@ def main(cfg: DictConfig):
     opt_cfg = OptimizerConfig(**cfg["optimizer_config"])
     data_cfg = DataConfig(**cfg["data_config"])
     trainer_cfg = TrainingConfig(**cfg["trainer_config"])
-    mlflow_cfg = MLFlowConfig(**cfg["mlflow"])
 
-    model, optimizer,  metrices, train_data, test_data = get_train_objs(
+    model, optimizer, metrices, train_data, test_data = get_train_objs(
         data_cfg, opt_cfg
     )
     trainer = Trainer(

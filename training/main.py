@@ -4,17 +4,18 @@ import sys
 from pathlib import Path
 
 import hydra
-import mlflow
 import torch
-from config_classes import DataConfig, MLFlowConfig, OptimizerConfig, TrainingConfig
-from dataset import Mind
-from models import *
-from models.models import TwoTowerRecommendation
+import wandb
 from omegaconf import DictConfig
 from torch.distributed import destroy_process_group, init_process_group
 from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchmetrics.retrieval import RetrievalAUROC, RetrievalNormalizedDCG
+
+from config_classes import DataConfig, OptimizerConfig, TrainingConfig
+from dataset import Mind
+from models import *
+from models.models import TwoTowerRecommendation
 from trainer import Trainer
 from utils import create_optimizer
 
@@ -78,8 +79,9 @@ def get_train_objs(data_cfg: DataConfig, opt_cfg: OptimizerConfig):
     ndcg_5 = RetrievalNormalizedDCG(top_k=5)
     ndcg_10 = RetrievalNormalizedDCG(top_k=10)
     model = TwoTowerRecommendation()
-    optimizer = create_optimizer(model, opt_cfg)
-
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=opt_cfg.learning_rate, betas=(0.9, 0.99)
+    )
     return (
         model,
         optimizer,
@@ -102,15 +104,8 @@ def main(cfg: DictConfig):
     opt_cfg = OptimizerConfig(**cfg["optimizer_config"])
     data_cfg = DataConfig(**cfg["data_config"])
     trainer_cfg = TrainingConfig(**cfg["trainer_config"])
-    mlflow_cfg = MLFlowConfig(**cfg["mlflow"])
 
     rank = int(os.environ["LOCAL_RANK"])
-    if rank == 0:
-        mlflow.set_tracking_uri("databricks")
-        mlflow.set_experiment(
-            "/Users/dev.arjunmnath@gmail.com/mind-recommendation-system"
-        )
-
     model, optimizer, metrices, train_data, test_data = get_train_objs(
         data_cfg, opt_cfg
     )
@@ -123,37 +118,15 @@ def main(cfg: DictConfig):
         test_dataset=test_data,
     )
     if rank == 0:
-        with mlflow.start_run() as run:
-            params = {
-                "learning_rate": opt_cfg.learning_rate,
-                "batch_size": trainer_cfg.batch_size,
-                "loss_function": "CosineEmbeddingLoss",
-                "metrics": [metric.__class__.__name__ for metric in metrices],
-                "optimizer": "AdamW",
-            }
-            mlflow.log_params(params)
-            click_padding = 32
-            history_padding = 512
-            non_click_padding = 256
-
-            with open("model_summary.txt", "w") as f:
-                f.write(
-                    str(
-                        summary(
-                            model,
-                            [
-                                (64, history_padding, 768),
-                                (64, click_padding, 768),
-                                (64, non_click_padding, 768),
-                            ],
-                            device=device,
-                        )
-                    )
-                )
-            mlflow.log_artifact("model_summary.txt")
-            trainer.train()
-            model_info = mlflow.pytorch.log_model(model, name="model")
-            logger.info(f"Model info: {model_info}")
+        with wandb.init(project="mind", entity="arjunmnath-iiitkottayam") as run:
+            run.config.batch_size = trainer_cfg.batch_size
+            run.config.learning_rate = opt_cfg.learning_rate
+            run.config.weight_decay = opt_cfg.weight_decay
+            run.config.epochs = trainer_cfg.max_epochs
+            run.config.optimizer = "AdamW"
+            run.config.metrics = ([metric.__class__.__name__ for metric in metrices],)
+            run.config.loss_function = "InfoNCE"
+            trainer.train(run)
     else:
         trainer.train()
     destroy_process_group()

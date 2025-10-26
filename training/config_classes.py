@@ -37,10 +37,6 @@ class DataConfig:
     precompute: bool
 
 
-@dataclass
-class MLFlowConfig:
-    tracking_uri: str
-
 
 @dataclass
 class Snapshot:
